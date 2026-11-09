@@ -55,6 +55,7 @@ def kb_pishva_main():
         InlineKeyboardButton("📅 تقویم", callback_data="menu_calendar")],
         [InlineKeyboardButton("🤖 رهگشا", callback_data="ai_assistant_open"),
         InlineKeyboardButton("🧑‍💻 مدیریت دستیار", callback_data="ai_manage_menu_main")],
+        [InlineKeyboardButton("🤖 رهگشای مدیر ⏱", callback_data="mgr_menu")],
         [InlineKeyboardButton("💡 انتقادات و پیشنهادات", callback_data="menu_feedback")],
     ])
 
@@ -494,7 +495,7 @@ _PISHVA_PANEL_PAGES = [
          ("🛡️ پنل امنیتی APS", "security_panel", None)],
         [("🧑‍💻 مدیریت دستیار", "ai_manage_menu", None), ("⏰ یادآورها", "pishva_reminders", None)],
         [("🤖 کارهای دستیار", "pishva_ai_scheduled", None), ("🌅 خلاصه صبحگاهی", "pishva_brief", None)],
-        [("🏛️ گروه فرماندهی", "ops_menu", None)],
+        [("🏛️ گروه فرماندهی", "ops_menu", None), ("🤖 رهگشای مدیر", "mgr_menu", None)],
     ],
 ]
 

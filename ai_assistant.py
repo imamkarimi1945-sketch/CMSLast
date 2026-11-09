@@ -691,6 +691,11 @@ async def ai_assistant_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     visibility_levels = ["all", "pishva"] if role == ROLE_PISHVA else ["all"]
     memory_rows = await ai_memory.recent(visibility_levels, limit=8)
     system_prompt = _system_prompt(role, display_name, memory_rows, user_text=text)
+    try:
+        import ai_manager
+        system_prompt += await ai_manager.prompt_addon(role)    # «رهگشای مدیر»: ابزارها + وضعیتِ فعلی (فقط برای مدیر ارشد)
+    except Exception:
+        logger.info("manager prompt addon failed", exc_info=True)
     system_prompt += await _server_addon()   # چندسرور: هویت/پرامپتِ کلی و اختصاصیِ سرورِ جاری
     _prefs = await ai_persona.get_prefs(uid)
     _persona_block, _mem_used = await ai_persona.build_block_ex(uid, role, _prefs)

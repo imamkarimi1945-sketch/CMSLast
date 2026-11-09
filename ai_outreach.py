@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 BOSS = [ROLE_PISHVA]
 
 # ابزارهایی که همیشه تأیید صریح لازم دارند (حتی اگر confirm=never باشد)
-ALWAYS_CONFIRM = frozenset({"message_contact", "schedule_outreach", "ops_topic_delete"})
+ALWAYS_CONFIRM = frozenset({"message_contact", "schedule_outreach", "ops_topic_delete", "mgr_grant", "mgr_extend", "mgr_full_access"})
 
 MAX_TEXT = 1500
 MAX_TOPICS = 30
@@ -429,6 +429,9 @@ def register(app):
 # ═══════════════════════ متنِ تأییدیه (برای confirm_gate) ═══════════════════════
 async def describe_for_confirm(fname: str, fargs: dict) -> str:
     fargs = fargs or {}
+    if fname.startswith("mgr_"):
+        import ai_manager
+        return ai_manager._confirm_text(fname, fargs)
     if fname == "ops_topic_delete":
         return (f"🛡️ حذفِ تاپیکِ «{fargs.get('key')}» از گروه فرماندهی — تمامِ پیام‌های آن تاپیک برای همیشه پاک می‌شود "
                 "و برگشت‌پذیر نیست. تأیید می‌کنید؟")

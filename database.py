@@ -2595,6 +2595,12 @@ async def log_action(admin_id, action_type, description, target_id=None, snapsho
     تهران ثبت می‌شه تا با تاریخ‌هایی که منوی Undo (Tehran-based) فیلتر
     می‌کنه یکی باشه — رجوع کن به توضیحِ TEHRAN_TZ بالای فایل."""
     now = _now_tehran_iso()
+    try:       # اقدامِ «رهگشای مدیر» هیچ‌وقت به‌نامِ خودِ مدیر ارشد ثبت نمی‌شود
+        import mgr_ctx
+        if mgr_ctx.ACTING.get():
+            description = mgr_ctx.LABEL + str(description or "")
+    except Exception:
+        pass
 
     async def _write():
         async with aiosqlite.connect(DB_PATH) as db:

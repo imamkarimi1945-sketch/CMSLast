@@ -1565,7 +1565,8 @@ async def _dispatch_impl(name: str, args: dict, caller_id: int, caller_role: str
 async def dispatch(name: str, args: dict, caller_id: int, caller_role: str, ctx) -> str:
     result = await _dispatch_impl(name, args, caller_id, caller_role, ctx)
 
-    if name in ACTION_TOOL_NAMES and not result.startswith(("❌", "⛔")):
+    import mgr_ctx
+    if name in ACTION_TOOL_NAMES and not result.startswith(("❌", "⛔")) and not mgr_ctx.ACTING.get():
         try:
             actor = await _actor_label(caller_id, caller_role)
             args_str = ", ".join(f"{k}={v}" for k, v in (args or {}).items())
