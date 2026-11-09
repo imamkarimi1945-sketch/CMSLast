@@ -45,7 +45,7 @@ HARD_DENY = frozenset({
     "ops_topic_delete", "ops_cmd_create", "ops_cmd_edit", "ops_cmd_delete",
     "toggle_ai_online", "open_panel",
     "mgr_status", "mgr_grant", "mgr_extend", "mgr_revoke", "mgr_full_access", "mgr_preset", "mgr_capability_set", "mgr_directive",
-    "mgr_announce_config", "mgr_announce_send", "mgr_journal", "mgr_round_now", "mgr_schedule", "mgr_memory",
+    "mgr_announce_config", "mgr_announce_send", "mgr_journal", "mgr_round_now", "mgr_schedule", "mgr_memory", "mgr_report",
 })
 DESTRUCTIVE = frozenset({"kick_player", "delete_match", "block_user", "delete_team", "set_admin_active", "set_admin_permissions",
                          "clear_admin_warnings", "edit_match_result", "add_admin", "set_admin_role", "toggle_admin_ai_access",
@@ -165,9 +165,38 @@ async def get_state(force=False) -> dict:
     return json.loads(json.dumps(st))
 
 
+def short_dur(sec) -> str:
+    sec = max(0, int(sec))
+    d, r = divmod(sec, 86400)
+    hh, r = divmod(r, 3600)
+    mm = r // 60
+    if d:
+        return f"{fa(d)}ر {fa(hh)}س"
+    if hh:
+        return f"{fa(hh)}س {fa(mm)}د"
+    return f"{fa(mm)}د"
+
+
+def sync_button(st: dict):
+    """برچسب/رنگِ دکمه‌ی «رهگشای مدیر» در پنلِ مدیر ارشد و منوی اصلی (keyboards.MGR_BTN)."""
+    try:
+        import keyboards
+        t = timer_of(st)
+        if not t["active"]:
+            keyboards.MGR_BTN.update(label="⚪️ رهگشای مدیر", style="primary")
+        elif t["timed"]:
+            keyboards.MGR_BTN.update(label=f"🟢 رهگشای مدیر • {short_dur(t['remaining'])}",
+                                     style="danger" if t["remaining"] < 600 else "success")
+        else:
+            keyboards.MGR_BTN.update(label="🟢 رهگشای مدیر • ∞", style="success")
+    except Exception:
+        pass
+
+
 async def save_state(st: dict):
     await _exec("INSERT OR REPLACE INTO mgr_kv(k, v) VALUES ('state', ?)", (json.dumps(st, ensure_ascii=False),))
     _cache["v"], _cache["t"] = json.loads(json.dumps(st)), time.monotonic()
+    sync_button(st)
 
 
 def _iso(dt: datetime) -> str:
@@ -249,6 +278,76 @@ async def journal(kind, title, body="", trigger="", tools=None, ok=True):
 async def memory_add(kind, text):
     await _exec("INSERT INTO mgr_memory(ts, kind, text) VALUES (?,?,?)", (_iso(now_teh()), kind, text[:500]))
     await _exec("UPDATE mgr_memory SET active=0 WHERE id < (SELECT MAX(id) FROM mgr_memory) - 60")
+
+
+# ═══════════════════════ گزارشِ دوره (تا رهگشا همیشه بتواند بگوید «چه کردم») ═══════════════════════
+async def session_digest(session_id=None):
+    """خلاصه‌ی یک دوره‌ی مدیریت: دورها، اقدام‌های واقعی، پرسش‌ها، نتیجه‌گیری‌ها و روندِ آمار. → (متن، متا) | None"""
+    if session_id:
+        rows = await _rows("SELECT * FROM mgr_sessions WHERE id=?", (session_id,))
+    else:
+        rows = await _rows("SELECT * FROM mgr_sessions ORDER BY id DESC LIMIT 1")
+    if not rows:
+        return None
+    s = rows[0]
+    a, b = s["started_at"], s["ended_at"] or _iso(now_teh())
+    jr = await _rows("SELECT * FROM mgr_journal WHERE ts>=? AND ts<=? ORDER BY id", (a, b))
+    rounds = [r for r in jr if r["kind"] == "round"]
+    acts, reads, denied = [], 0, []
+    for r in rounds:
+        try:
+            tl = json.loads(r["tools"] or "[]")
+        except Exception:
+            tl = []
+        for x in tl:
+            nm = x.get("tool", "")
+            if nm in ("mgr_note", "mgr_ask_boss"):
+                continue
+            res = str(x.get("result", ""))
+            if res.startswith(("⛔", "❌", "⚠️")):
+                denied.append(f"{nm}: {res[:90]}")
+            elif nm.startswith(READ_PREFIX):
+                reads += 1
+            else:
+                acts.append(f"{nm}: {res[:100]}")
+    qs = [r for r in jr if r["kind"] == "question"]
+    mem = await _rows("SELECT kind, text FROM mgr_memory WHERE ts>=? AND ts<=? ORDER BY id", (a, b))
+    mt = await _rows("SELECT data FROM mgr_metrics WHERE ts>=? AND ts<=? ORDER BY id", (a, b))
+    ad, bd = _pdt(a), _pdt(b)
+    L = [f"از {jfmt(ad)} تا {jfmt(bd) if s['ended_at'] else 'الان (هنوز روشن)'}"
+         + (f" — {dur_fa((bd - ad).total_seconds())}" if ad and bd else "")
+         + (f" | پایان: {({'expired': 'پایانِ مهلت', 'manual': 'خاموشیِ دستی', 'kill': 'خاموشیِ فوری'}).get(s['end_reason'], s['end_reason'])}" if s["ended_at"] else "")]
+    L.append(f"🧠 {fa(len(rounds))} دور ({fa(sum(r['ok'] for r in rounds))} موفق) | 🔎 {fa(reads)} بررسی | 🛠 {fa(len(acts))} اقدام | 🚫 {fa(len(denied))} ردشده | ❓ {fa(len(qs))} پرسش از شما")
+    if acts:
+        L.append("اقدام‌ها:")
+        L += [f"• {x}" for x in acts[:14]] + ([f"… و {fa(len(acts) - 14)} مورد دیگر"] if len(acts) > 14 else [])
+    else:
+        L.append("اقدامِ تغییردهنده‌ای انجام نشد.")
+    if denied:
+        L.append("ردشده (قفل/سقف/خطا): " + " | ".join(denied[:4]))
+    if qs:
+        L.append("پرسش‌ها از شما: " + " | ".join(q["body"][:90] for q in qs[:4]))
+    if mem:
+        L.append("نتیجه‌گیری‌ها: " + " | ".join(f"[{m['kind']}] {m['text'][:90]}" for m in mem[:6]))
+    if len(mt) >= 2:
+        try:
+            m0, m1 = json.loads(mt[0]["data"]), json.loads(mt[-1]["data"])
+            L.append(f"روند: امتیازِ امنیت {m0.get('score')}→{m1.get('score')} | غریبه‌ها {m0.get('strangers')}→{m1.get('strangers')} | "
+                     f"درخواستِ در انتظار {m0.get('pending')}→{m1.get('pending')} | بازیکنِ دارای اخطار {m0.get('warned')}→{m1.get('warned')}")
+        except Exception:
+            pass
+    return "\n".join(L), {"rounds": len(rounds), "actions": len(acts), "questions": len(qs), "id": s["id"], "ended": bool(s["ended_at"])}
+
+
+async def _chat_note(text: str):
+    """خلاصه‌ی هر دور را به تاریخچه‌ی چتِ مدیر ارشد با رهگشا اضافه می‌کند تا در گفتگو «به یاد داشته باشد»."""
+    try:
+        import ai_shared
+        sid = await ai_shared.get_active_session(PISHVA_ID)
+        if sid:
+            await db.ai_add_message(sid, "ai", text[:900])
+    except Exception:
+        logger.info("manager chat note failed", exc_info=True)
 
 
 # ═══════════════════════ اعلام ═══════════════════════
@@ -361,12 +460,17 @@ async def revoke(bot, reason="manual", by=None):
     now = now_teh()
     if st["session_id"]:
         await _exec("UPDATE mgr_sessions SET ended_at=?, end_reason=? WHERE id=?", (_iso(now), reason, st["session_id"]))
+    sid_done = st["session_id"]
     st.update(active=False, started_at=None, expires_at=None, next_round=None, session_id=None, warned=[])
     await save_state(st)
     await journal("revoke", "پایانِ «حالتِ مدیر»", {"manual": "خاموشیِ دستی", "expired": "پایانِ مهلت", "kill": "خاموشیِ فوری"}.get(reason, reason))
     note = await announce(bot, "revoked")
-    if reason == "expired":
-        await _boss(bot, "⏳ <b>مهلتِ «رهگشای مدیر» تمام شد.</b>\nمدیریت دوباره کاملاً دستِ شماست. گزارشِ همه‌ی کارها در پنل ← ژورنال.")
+    digest = await session_digest(sid_done)
+    if digest:
+        await journal("session_summary", "گزارشِ پایانِ دوره", digest[0])
+        head = "⏳ <b>مهلتِ «رهگشای مدیر» تمام شد.</b>" if reason == "expired" else "🔴 <b>«رهگشای مدیر» خاموش شد.</b>"
+        await _boss(bot, f"{head}\n\n📋 <b>گزارشِ این دوره</b>\n{h(digest[0])}\n\nهر وقت خواستید از رهگشا بپرسید «در این مدت چه کردی؟».")
+        await _chat_note("📋 [گزارشِ پایانِ دورهٔ مدیریت]\n" + digest[0])
     return True, f"🔴 رهگشای مدیر خاموش شد.\n{note}"
 
 
@@ -680,6 +784,8 @@ async def run_round(bot, trigger="periodic", note="") -> str:
         await save_state(st)
         await journal("round", f"دورِ {({'daily': 'روزانه', 'manual': 'دستی', 'periodic': 'خودکار'}).get(trigger, trigger)}", final, trigger,
                       [{"tool": n, "args": a, "result": r} for n, a, r in executed])
+        await _chat_note(f"📋 [گزارشِ خودکارِ دورِ مدیریتی — {jfmt(t0)}]\n{final}"
+                         + (("\nاقدام‌ها: " + " | ".join(a_[2:] for a_ in acts[:6])) if acts else ""))
         await _deliver_report(bot, st, f"🤖 گزارشِ رهگشای مدیر — {jfmt(t0)}\n━━━━━━━━━━━━\n{final}"
                               + (f"\n\n🔧 اجرا شده ({fa(len(acts))}):\n" + "\n".join(acts[:12]) if acts else ""))
         return final
@@ -707,6 +813,7 @@ async def _tick(context):
         return
     try:
         st = await get_state(force=True)
+        sync_button(st)
         if st["active"]:
             now = now_teh()
             e = _pdt(st["expires_at"])
@@ -748,13 +855,20 @@ def start(application):
     _APP = application
     if application.job_queue:
         application.job_queue.run_repeating(_tick, interval=30, first=40, name="manager_tick")
+
+        async def _first_sync(_ctx):
+            try:
+                sync_button(await get_state(force=True))
+            except Exception:
+                logger.info("manager button first sync failed", exc_info=True)
+        application.job_queue.run_once(_first_sync, 3)
     logger.info("ai_manager: started")
 
 
 # ═══════════════════════ ابزارهای چتِ رهگشا (فقط مدیر ارشد) ═══════════════════════
 TOOL_PERMISSIONS = {n: BOSS for n in (
     "mgr_status", "mgr_grant", "mgr_extend", "mgr_revoke", "mgr_full_access", "mgr_preset", "mgr_capability_set",
-    "mgr_directive", "mgr_announce_config", "mgr_announce_send", "mgr_journal", "mgr_round_now", "mgr_schedule", "mgr_memory")}
+    "mgr_directive", "mgr_announce_config", "mgr_announce_send", "mgr_journal", "mgr_round_now", "mgr_schedule", "mgr_memory", "mgr_report")}
 CATEGORY = ("manager", "🤖 رهگشای مدیر (سپردنِ مدیریت، اختیارات، اعلام، ژورنال)", list(TOOL_PERMISSIONS))
 ACTION_NAMES = frozenset({"mgr_grant", "mgr_extend", "mgr_revoke", "mgr_full_access", "mgr_preset", "mgr_capability_set", "mgr_directive",
                           "mgr_announce_config", "mgr_announce_send", "mgr_schedule", "mgr_round_now"})
@@ -790,7 +904,12 @@ TOOL_DECLARATIONS = [
                                                       "ops_group": _B, "announcement_group": _B, "report_boss_pm": _B, "report_ops_group": _B}}},
     {"name": "mgr_announce_send", "description": "ارسالِ فوریِ یک اعلام (متنِ دلخواه یا اعلامِ استانداردِ وضعیت) با مخاطبِ دلخواه که فقط برای همین ارسال است (admins_mode/admins/ops_group/announcement_group).",
      "parameters": {"type": "object", "properties": {"text": _S, "admins_mode": _S, "admins": {"type": "array", "items": _S}, "ops_group": _B, "announcement_group": _B}}},
-    {"name": "mgr_journal", "description": "ژورنالِ تصمیم‌ها و اقدام‌های رهگشای مدیر (آخرین‌ها).", "parameters": {"type": "object", "properties": {"limit": _I}}},
+    {"name": "mgr_report", "description": (
+        "گزارشِ «در این مدت چه کردی؟»: خلاصه‌ی یک دوره‌ی مدیریت (دورها، اقدام‌های واقعی، پرسش‌ها، نتیجه‌گیری‌ها، روندِ آمار). "
+        "session: current (دوره‌ی جاری) | last (آخرین دوره؛ پیش‌فرض) | all (همه‌ی دوره‌ها، فشرده) | یک شناسه‌ی عددی. detail=true متنِ کاملِ گزارشِ هر دور را هم می‌آورد. "
+        "هر وقت مدیر ارشد پرسید در غیابش چه شد/چه کردی، اول این را بخوان؛ هرگز نگو «یادم نیست»."),
+     "parameters": {"type": "object", "properties": {"session": _S, "detail": _B}}},
+    {"name": "mgr_journal", "description": "ژورنالِ تصمیم‌ها و اقدام‌های رهگشای مدیر. limit (تا ۳۰)، kind (round|grant|revoke|question|caps|…)، since_hours، full=true برای متنِ کامل.", "parameters": {"type": "object", "properties": {"limit": _I, "kind": _S, "since_hours": _I, "full": _B}}},
     {"name": "mgr_round_now", "description": "همین الان یک دورِ مدیریتی اجرا کن (فقط وقتی حالتِ مدیر روشن است). note: توضیحِ اختیاری برای تمرکزِ دور.",
      "parameters": {"type": "object", "properties": {"note": _S}}},
     {"name": "mgr_schedule", "description": "برنامه‌ی دورها: interval_hours (۱ تا ۷۲)، daily_time (HH:MM وقتِ تهران)، autonomous (روشن/خاموشِ دورهای خودکار)، daily_review (روشن/خاموشِ بررسیِ روزانه).",
@@ -944,10 +1063,45 @@ async def dispatch_tool(name, args, caller_id, caller_role, ctx):
         st = await get_state(force=True)
         text = h(args["text"]) if args.get("text") else None
         return await announce(bot, "granted" if st["active"] else "revoked", ov, text)
+    if name == "mgr_report":
+        which = str(args.get("session") or "last")
+        if which == "all":
+            ss = await _rows("SELECT id FROM mgr_sessions ORDER BY id DESC LIMIT 8")
+            if not ss:
+                return "📭 هنوز هیچ دوره‌ای نبوده."
+            parts = []
+            for r in ss:
+                d = await session_digest(r["id"])
+                parts.append(f"— دوره #{r['id']} —\n{d[0] if d else ''}")
+            return "\n\n".join(parts)[:6500]
+        sid = int(which) if which.isdigit() else None
+        if which == "current":
+            st = await get_state(force=True)
+            if not st["active"]:
+                return "⚪️ الان دوره‌ای در جریان نیست؛ «last» را بخوان."
+            sid = st["session_id"]
+        d = await session_digest(sid)
+        if not d:
+            return "📭 هنوز هیچ دوره‌ای نبوده."
+        out = f"📋 دوره #{d[1]['id']}\n{d[0]}"
+        if args.get("detail"):
+            srow = (await _rows("SELECT started_at, ended_at FROM mgr_sessions WHERE id=?", (d[1]["id"],)))[0]
+            rr = await _rows("SELECT ts, title, body FROM mgr_journal WHERE kind='round' AND ts>=? AND ts<=? ORDER BY id",
+                             (srow["started_at"], srow["ended_at"] or _iso(now_teh())))
+            out += "\n\n— گزارشِ هر دور —\n" + "\n\n".join(f"[{jfmt(_pdt(x['ts']))}] {x['title']}\n{(x['body'] or '')[:700]}" for x in rr)
+        return out[:6500]
     if name == "mgr_journal":
-        n = max(1, min(15, int(args.get("limit") or 6)))
-        rows = await _rows("SELECT ts, kind, title, body FROM mgr_journal ORDER BY id DESC LIMIT ?", (n,))
-        return "\n\n".join(f"[{jfmt(_pdt(r['ts']))}] {r['kind']} — {r['title']}\n{(r['body'] or '')[:500]}" for r in rows) or "📭 ژورنال خالی است."
+        n = max(1, min(30, int(args.get("limit") or 6)))
+        q, qa = "SELECT ts, kind, title, body FROM mgr_journal WHERE 1=1", []
+        if args.get("kind"):
+            q += " AND kind=?"
+            qa.append(str(args["kind"]))
+        if args.get("since_hours"):
+            q += " AND ts>=?"
+            qa.append(_iso(now_teh() - timedelta(hours=int(args["since_hours"]))))
+        rows = await _rows(q + " ORDER BY id DESC LIMIT ?", (*qa, n))
+        cap = 1500 if args.get("full") else 500
+        return "\n\n".join(f"[{jfmt(_pdt(r['ts']))}] {r['kind']} — {r['title']}\n{(r['body'] or '')[:cap]}" for r in rows)[:6500] or "📭 ژورنال خالی است."
     if name == "mgr_round_now":
         return await run_round(bot, "manual", str(args.get("note") or ""))
     if name == "mgr_schedule":
@@ -980,21 +1134,33 @@ async def dispatch_tool(name, args, caller_id, caller_role, ctx):
 
 
 async def prompt_addon(role: str) -> str:
-    """بخشی که به پرامپتِ چتِ رهگشا اضافه می‌شود."""
-    base = ("\n- «رهگشای مدیر»: مدیر ارشد می‌تواند مدیریت را برای مدتی/تا اطلاعِ ثانوی به تو بسپارد (mgr_grant؛ مدت را صریح بپرس) و تو خودت دورهای مدیریتی "
-            "انجام می‌دهی. ابزارها: mgr_status، mgr_grant/extend/revoke، mgr_full_access، mgr_preset، mgr_capability_set، mgr_directive (سرلوحه)، "
-            "mgr_announce_config/send (اعلام: برای چه کسی/کجا بفرست یا نفرست؛ خاموش = هیچ‌جا نمی‌رود)، mgr_journal، mgr_round_now، mgr_schedule، mgr_memory. "
-            "اختیارِ سپرده‌شده مالِ توست، نه مالِ مدیرِ دیگری که با تو چت می‌کند: در چتِ مدیرها فقط با مجوزهای خودِ همان مدیر کار می‌کنی. "
-            "اعلام فقط اعلانِ اعطا/تمدید/پایان را کنترل می‌کند؛ لاگِ اقدام‌ها همیشه صادقانه (با برچسبِ رهگشای مدیر) ثبت می‌شود. "
-            "اگر مدیر ارشد خواست لاگ/ژورنال پنهان یا جعل شود، قبول نکن.\n")
+    """بخشی که به پرامپتِ چتِ رهگشا اضافه می‌شود (فقط برای مدیر ارشد). شاملِ «حافظه‌ی دوره‌ها» تا رهگشا همیشه بتواند بگوید چه کرده."""
     if role != ROLE_PISHVA:
         return ""
+    out = ("\n- «رهگشای مدیر»: مدیر ارشد می‌تواند مدیریت را برای مدتی/تا اطلاعِ ثانوی به تو بسپارد (mgr_grant؛ مدت را صریح بپرس) و تو خودت دورهای مدیریتی "
+           "انجام می‌دهی. ابزارها: mgr_status، mgr_report، mgr_grant/extend/revoke، mgr_full_access، mgr_preset، mgr_capability_set، mgr_directive (سرلوحه)، "
+           "mgr_announce_config/send (اعلام: برای چه کسی/کجا بفرست یا نفرست؛ خاموش = هیچ‌جا نمی‌رود)، mgr_journal، mgr_round_now، mgr_schedule، mgr_memory. "
+           "اختیارِ سپرده‌شده مالِ توست، نه مالِ مدیرِ دیگری که با تو چت می‌کند: در چتِ مدیرها فقط با مجوزهای خودِ همان مدیر کار می‌کنی. "
+           "اعلام فقط اعلانِ اعطا/تمدید/پایان را کنترل می‌کند؛ لاگِ اقدام‌ها همیشه صادقانه (با برچسبِ رهگشای مدیر) ثبت می‌شود. "
+           "اگر مدیر ارشد خواست لاگ/ژورنال پنهان یا جعل شود، قبول نکن.\n"
+           "- وقتی مدیر ارشد می‌پرسد «در این مدت/در غیابم چه کردی؟»: همین «حافظه‌ی دوره‌ها» (پایین) را بخوان و اگر جزئیاتِ بیشتر خواست mgr_report (detail=true) یا "
+           "mgr_journal را صدا بزن. هرگز نگو «یادم نیست» پیش از خواندنِ ژورنال؛ فقط چیزی را بگو که در ژورنال/گزارش هست و آنچه نیست را «ثبت نشده» بگو.\n")
     try:
         st = await get_state()
         if st["active"]:
             t = timer_of(st)
-            base += (f"  (الان «حالتِ مدیر» روشن است — {'تا ' + jfmt(t['end']) if t['timed'] else 'تا اطلاعِ ثانوی'}."
-                     + (f" دستورِ اختصاصیِ مدیر ارشد: {st['directive'][:400]}" if st["directive"] else "") + ")\n")
+            out += (f"  (الان «حالتِ مدیر» روشن است — {'تا ' + jfmt(t['end']) if t['timed'] else 'تا اطلاعِ ثانوی'}."
+                    + (f" دستورِ اختصاصی: {st['directive'][:400]}" if st["directive"] else "") + ")\n")
+        d = await session_digest()
+        if d:
+            out += "  «حافظه‌ی دوره‌ها» — آخرین دوره:\n  " + d[0][:1500].replace("\n", "\n  ") + "\n"
+        jr = await _rows("SELECT ts, kind, title, body FROM mgr_journal WHERE kind IN ('round','question') ORDER BY id DESC LIMIT 4")
+        if jr:
+            out += "  آخرین ثبت‌های ژورنال:\n" + "\n".join(
+                f"  - [{jfmt(_pdt(r['ts']), '%m/%d %H:%M')}] {r['title']}: {(r['body'] or '')[:160].replace(chr(10), ' ')}" for r in jr) + "\n"
+        mem = await _rows("SELECT kind, text FROM mgr_memory WHERE active=1 ORDER BY id DESC LIMIT 6")
+        if mem:
+            out += "  یادداشت‌های ماندگارِ خودت: " + " | ".join(f"[{m['kind']}] {m['text'][:100]}" for m in mem) + "\n"
     except Exception:
-        pass
-    return base
+        logger.info("manager prompt memory failed", exc_info=True)
+    return out

@@ -12,8 +12,8 @@ import re
 import time
 from datetime import timedelta
 
-from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
-from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, MessageHandler, filters
+from telegram import InlineKeyboardButton as _B, InlineKeyboardMarkup as M
+from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 import ai_manager as am
 import database as db
@@ -24,6 +24,21 @@ from ops_group import bar, fa, h, jfmt, now_teh, spark
 logger = logging.getLogger(__name__)
 
 PAGE = 8
+
+
+def B(label, callback_data=None, style="primary", **kw):
+    """همه‌ی دکمه‌های این پنل رنگی‌اند (primary آبی، success سبز، danger قرمز) مثلِ بقیه‌ی ربات؛
+    کلیدهای خاموش/روشن با وضعیتشان سبز/قرمز می‌شوند."""
+    return _B(label, callback_data=callback_data, style=style, **kw)
+
+
+def _tog(on: bool) -> str:
+    return "success" if on else "danger"
+
+
+def _hash(text, kb) -> str:
+    sig = text + "|" + "|".join(b.text for row in kb.inline_keyboard for b in row)
+    return hashlib.md5(sig.encode()).hexdigest()
 LIVE_TTL = 15 * 60
 _LIVE = {}          # (chat_id, message_id) -> {"t": زمانِ آخرین لمس, "hash": …}
 
@@ -95,18 +110,32 @@ async def render_main():
     a = st["announce"]
     L.append(f"📣 اعلام: <b>{'روشن' if a['on'] else 'خاموش'}</b>" + (f" → {ADM_MODE[a['admins']]}" if a["on"] else " (هیچ‌جا اعلانی نمی‌رود)"))
     L.append(f"\n🕒 <code>{jfmt(now_teh(), '%H:%M:%S')}</code>")
+    jn = (await am._rows("SELECT COUNT(*) AS n FROM mgr_journal"))[0]["n"]
+    caps_lbl = f"🔐 اختیارات {fa(on_n)}/{fa(all_n)}" + (" 👑" if st["full_access"] else "")
+    dir_lbl = "📜 دستور اختصاصی ✅" if st["directive"] else "📜 دستور اختصاصی"
+    ann_lbl = "📣 اعلام ✅" if a["on"] else "📣 اعلام ⛔"
     kb = [[B("🛑 خاموشیِ فوری", callback_data="mgr:kill", style="danger") if t["active"]
-           else B("⚡ روشن‌کردن", callback_data="mgr:on", style="success")],
-          [B("⏱ مدت/تمدید", callback_data="mgr:dur") if t["active"] else B("📜 دستور اختصاصی", callback_data="mgr:dir"),
-           B("🔐 اختیارات", callback_data="mgr:caps:0")],
-          [B("📜 دستور اختصاصی", callback_data="mgr:dir") if t["active"] else B("📣 اعلام", callback_data="mgr:ann"),
-           B("📣 اعلام", callback_data="mgr:ann") if t["active"] else B("⚙️ برنامه‌ی دورها", callback_data="mgr:sch")],
-          [B("🧠 اجرای دور همین الان", callback_data="mgr:rn") if t["active"] else B("📓 ژورنال", callback_data="mgr:j:0"),
-           B("📓 ژورنال", callback_data="mgr:j:0") if t["active"] else B("📈 روند و یادداشت‌ها", callback_data="mgr:tr")]]
+           else B("⚡ روشن‌کردن", callback_data="mgr:on", style="success")]]
     if t["active"]:
-        kb.append([B("📈 روند و یادداشت‌ها", callback_data="mgr:tr"), B("⚙️ برنامه‌ی دورها", callback_data="mgr:sch")])
+        dur_lbl = f"⏱ مدت/تمدید • {am.short_dur(t['remaining'])}" if t["timed"] else "⏱ مدت/تمدید • ∞"
+        nr_ = am._pdt(st["next_round"])
+        kb += [[B(dur_lbl, callback_data="mgr:dur", style="danger" if t.get("timed") and t["remaining"] < 600 else "primary"),
+                B(caps_lbl, callback_data="mgr:caps:0", style="success" if st["full_access"] else "primary")],
+               [B(dir_lbl, callback_data="mgr:dir", style=_tog(bool(st["directive"])) if st["directive"] else "primary"),
+                B(ann_lbl, callback_data="mgr:ann", style=_tog(a["on"]))],
+               [B("🧠 اجرای دور همین الان" + (f" • بعدی {jfmt(nr_, '%H:%M')}" if nr_ else ""), callback_data="mgr:rn", style="success")]]
+    else:
+        kb += [[B(dir_lbl, callback_data="mgr:dir", style="success" if st["directive"] else "primary"),
+                B(caps_lbl, callback_data="mgr:caps:0", style="success" if st["full_access"] else "primary")],
+               [B(ann_lbl, callback_data="mgr:ann", style=_tog(a["on"])),
+                B(f"⚙️ برنامه‌ی دورها • هر {fa(st['interval_min'] // 60)}س", callback_data="mgr:sch")]]
+    kb.append([B(f"📓 ژورنال ({fa(jn)})", callback_data="mgr:j:0"), B("📋 گزارشِ دوره", callback_data="mgr:rep")])
+    if t["active"]:
+        kb.append([B("📈 روند و یادداشت‌ها", callback_data="mgr:tr"), B(f"⚙️ دورها • هر {fa(st['interval_min'] // 60)}س", callback_data="mgr:sch")])
+    else:
+        kb.append([B("📈 روند و یادداشت‌ها", callback_data="mgr:tr")])
     kb.append([B("💬 گفتگو با رهگشا", callback_data="mgr:chat"), B("🔄 بازخوانی", callback_data="mgr:ref")])
-    kb.append([B("🔙 پنل مدیر ارشد", callback_data="menu_pishva")])
+    kb.append([B("🔙 پنل مدیر ارشد", callback_data="menu_pishva", style="danger")])
     return "\n".join(L), M(kb)
 
 
@@ -115,7 +144,7 @@ async def _show_main(q, toast=None):
     await safe_edit_message_text(q, text, reply_markup=kb, parse_mode="HTML")
     msg = q.message
     if msg:
-        _LIVE[(msg.chat_id, msg.message_id)] = {"t": time.monotonic(), "hash": hashlib.md5(text.encode()).hexdigest()}
+        _LIVE[(msg.chat_id, msg.message_id)] = {"t": time.monotonic(), "hash": _hash(text, kb)}
     if toast:
         await q.answer(toast[:190])
 
@@ -133,7 +162,7 @@ async def refresh_live(bot):
             continue
         if text is None:
             text, kb = await render_main()
-        hsh = hashlib.md5(text.encode()).hexdigest()
+        hsh = _hash(text, kb)
         if hsh == info["hash"]:
             continue
         try:
@@ -142,6 +171,17 @@ async def refresh_live(bot):
         except Exception as e:
             if "not modified" not in str(e).lower():
                 _LIVE.pop(key, None)
+
+
+async def cmd_a(update, ctx):
+    """/A — بازکردنِ سریعِ پنلِ «رهگشای مدیر». فقط مدیر ارشد و فقط در پیوی؛ برای بقیه هیچ واکنشی نیست."""
+    m, user, chat = update.effective_message, update.effective_user, update.effective_chat
+    if not (m and user and chat) or user.id != PISHVA_ID or chat.type != "private":
+        return
+    ctx.user_data.pop("mgr_wait", None)
+    text, kb = await render_main()
+    sent = await m.reply_text(text, reply_markup=kb, parse_mode="HTML")
+    _LIVE[(sent.chat_id, sent.message_id)] = {"t": time.monotonic(), "hash": _hash(text, kb)}
 
 
 async def mgr_menu(update, ctx):
@@ -155,7 +195,7 @@ async def mgr_menu(update, ctx):
 
 # ═══════════════════════ هندلرِ کلیدها ═══════════════════════
 def _back(to="mgr:ref"):
-    return [B("🔙 رهگشای مدیر", callback_data=to)]
+    return [B("🔙 رهگشای مدیر", callback_data=to, style="danger")]
 
 
 async def cb(update, ctx, data=None):
@@ -177,7 +217,7 @@ async def cb(update, ctx, data=None):
         a_on = st["announce"]["on"]
         rows = [[B(lbl, callback_data=f"mgr:g:{m}") for lbl, m in DUR_ON[i:i + 3]] for i in range(0, len(DUR_ON), 3)]
         rows.append([B("♾ تا اطلاعِ ثانوی", callback_data="mgr:g:inf"), B("✍️ مدتِ دلخواه", callback_data="mgr:gc")])
-        rows.append([B(f"📣 اعلامِ این اعطا: {'✅ روشن' if a_on else '⛔ خاموش'}", callback_data="mgr:annt:on")])
+        rows.append([B(f"📣 اعلامِ این اعطا: {'✅ روشن' if a_on else '⛔ خاموش'}", callback_data="mgr:annt:on", style=_tog(a_on))])
         rows.append(_back())
         await q.answer()
         await safe_edit_message_text(q, "⚡ <b>سپردنِ مدیریت به رهگشا</b>\nمدت را انتخاب کنید. اختیاراتِ فعلی: "
@@ -225,8 +265,8 @@ async def cb(update, ctx, data=None):
         if not t["active"]:
             await _show_main(q, "خاموش است.")
             return
-        rows = [[B("➕ ۱ ساعت", callback_data="mgr:x:60"), B("➕ ۶ ساعت", callback_data="mgr:x:360"), B("➕ ۱ روز", callback_data="mgr:x:1440")],
-                [B("➖ ۱ ساعت", callback_data="mgr:x:-60"), B("➖ ۶ ساعت", callback_data="mgr:x:-360")],
+        rows = [[B("➕ ۱ ساعت", callback_data="mgr:x:60", style="success"), B("➕ ۶ ساعت", callback_data="mgr:x:360", style="success"), B("➕ ۱ روز", callback_data="mgr:x:1440", style="success")],
+                [B("➖ ۱ ساعت", callback_data="mgr:x:-60", style="danger"), B("➖ ۶ ساعت", callback_data="mgr:x:-360", style="danger")],
                 [B("از همین الان: ۱ ساعت", callback_data="mgr:s:60"), B("۶ ساعت", callback_data="mgr:s:360"), B("۱ روز", callback_data="mgr:s:1440")],
                 [B("♾ تا اطلاعِ ثانوی", callback_data="mgr:s:inf"), B("✍️ مدتِ دلخواه", callback_data="mgr:xc")], _back()]
         await q.answer()
@@ -279,7 +319,7 @@ async def cb(update, ctx, data=None):
         page = max(0, min(page, pages - 1))
         rows = []
         for d in defs[page * PAGE:(page + 1) * PAGE]:
-            rows.append([B(("✅ " if caps[d["key"]] else "⛔ ") + d["label"], callback_data=f"mgr:c:{d['key']}:{page}")])
+            rows.append([B(("✅ " if caps[d["key"]] else "⛔ ") + d["label"], callback_data=f"mgr:c:{d['key']}:{page}", style=_tog(caps[d["key"]]))])
         nav = []
         if page > 0:
             nav.append(B("◀️", callback_data=f"mgr:caps:{page - 1}"))
@@ -288,7 +328,7 @@ async def cb(update, ctx, data=None):
             nav.append(B("▶️", callback_data=f"mgr:caps:{page + 1}"))
         rows.append(nav)
         rows.append([B("🔒 محتاط", callback_data="mgr:pre:cautious"), B("⚖️ متعادل", callback_data="mgr:pre:balanced"),
-                     B("👑 خاموش‌کردنِ کامل" if st["full_access"] else "👑 کامل", callback_data="mgr:fulloff" if st["full_access"] else "mgr:full")])
+                     B("👑 خاموش‌کردنِ کامل" if st["full_access"] else "👑 کامل", callback_data="mgr:fulloff" if st["full_access"] else "mgr:full", style="danger" if st["full_access"] else "success")])
         rows.append(_back())
         on_n, all_n = _caps_summary(st)
         await q.answer()
@@ -305,7 +345,7 @@ async def cb(update, ctx, data=None):
         await safe_edit_message_text(q, "📜 <b>دستورِ اختصاصیِ رهگشای مدیر</b>\nاین متن «سرلوحه‌ی کارِ» رهگشا در هر دور است و بر بقیه مقدم است.\n\n"
                                      + (f"<blockquote>{h(st['directive'])}</blockquote>" if st["directive"] else "— هنوز دستوری ثبت نشده —"),
                                      reply_markup=M([[B("✏️ جایگزین‌کردن", callback_data="mgr:dirs"), B("➕ افزودن", callback_data="mgr:dira")],
-                                                     [B("🗑 پاک‌کردن", callback_data="mgr:dirc")], _back()]), parse_mode="HTML")
+                                                     [B("🗑 پاک‌کردن", callback_data="mgr:dirc", style="danger")], _back()]), parse_mode="HTML")
         return
     if act in ("dirs", "dira"):
         ctx.user_data["mgr_wait"] = "dir_set" if act == "dirs" else "dir_add"
@@ -344,11 +384,11 @@ async def cb(update, ctx, data=None):
         rows = [[B(f"📣 اعلام: {'✅ روشن' if a['on'] else '⛔ خاموش'}", callback_data="mgr:annm", style="success" if a["on"] else "danger")],
                 [B(f"👥 مدیران: {ADM_MODE[a['admins']]}", callback_data="mgr:annmode")]]
         if a["admins"] in ("only", "except"):
-            rows.append([B(f"🎯 انتخابِ مدیرها ({fa(len(a['ids']))})", callback_data="mgr:aa:0")])
-        rows += [[B(f"🏛 گروه فرماندهی: {'✔' if a['ops_group'] else '✖'}", callback_data="mgr:annops"),
-                  B(f"📡 گروه اعلانات: {'✔' if a['ann_group'] else '✖'}", callback_data="mgr:anngrp")],
-                 [B(f"🧾 گزارشِ دورها ← به من: {'✔' if r['boss_pm'] else '✖'}", callback_data="mgr:repboss"),
-                  B(f"← به گروه: {'✔' if r['ops_group'] else '✖'}", callback_data="mgr:repops")],
+            rows.append([B(f"🎯 انتخابِ مدیرها ({fa(len(a['ids']))})", callback_data="mgr:aa:0", style="success" if a['ids'] else "primary")])
+        rows += [[B(f"🏛 گروه فرماندهی: {'✔' if a['ops_group'] else '✖'}", callback_data="mgr:annops", style=_tog(a['ops_group'])),
+                  B(f"📡 گروه اعلانات: {'✔' if a['ann_group'] else '✖'}", callback_data="mgr:anngrp", style=_tog(a['ann_group']))],
+                 [B(f"🧾 گزارشِ دورها ← به من: {'✔' if r['boss_pm'] else '✖'}", callback_data="mgr:repboss", style=_tog(r['boss_pm'])),
+                  B(f"← به گروه: {'✔' if r['ops_group'] else '✖'}", callback_data="mgr:repops", style=_tog(r['ops_group']))],
                  [B("📤 ارسالِ اعلامِ وضعیت همین الان", callback_data="mgr:annsend")], _back()]
         await safe_edit_message_text(q, "📣 <b>اعلام</b>\nروشن: موقعِ اعطا/تمدید/پایانِ حالتِ مدیر، به مخاطبانِ زیر خبر می‌رود.\n"
                                      "خاموش: <b>هیچ‌جا هیچ اعلانی نمی‌رود</b>.\n"
@@ -365,7 +405,7 @@ async def cb(update, ctx, data=None):
             await am.save_state(st)
         adm = [x for x in await db.get_active_admins() if int(x["telegram_id"]) != PISHVA_ID][:20]
         rows = [[B(("✅ " if int(x["telegram_id"]) in a["ids"] else "▫️ ") + (x["display_name"] or x["full_name"] or str(x["telegram_id"])),
-                   callback_data=f"mgr:aa:{x['telegram_id']}")] for x in adm]
+                   callback_data=f"mgr:aa:{x['telegram_id']}", style=_tog(int(x['telegram_id']) in a['ids']) if int(x['telegram_id']) in a['ids'] else "primary")] for x in adm]
         rows.append(_back("mgr:ann"))
         await q.answer()
         await safe_edit_message_text(q, f"🎯 <b>انتخابِ مدیرها</b>\nحالت: {ADM_MODE[a['admins']]}\n"
@@ -394,10 +434,10 @@ async def cb(update, ctx, data=None):
             await am.save_state(st)
         caps = am.eff_caps(st)
         await q.answer()
-        rows = [[B(("✅ " if st["interval_min"] == hh * 60 else "") + f"{fa(hh)} ساعت", callback_data=f"mgr:schi:{hh}") for hh in (1, 3, 6, 12, 24)],
-                [B(("✅ " if st["daily_time"] == t else "") + fa(t), callback_data=f"mgr:schd:{t.replace(':', '')}") for t in ("20:00", "21:00", "22:00", "23:00")],
-                [B(f"🔄 دورهای خودکار: {'✅' if caps['autonomous_rounds'] else '⛔'}", callback_data="mgr:scha"),
-                 B(f"🛡️ بررسیِ روزانه: {'✅' if caps['daily_review'] else '⛔'}", callback_data="mgr:schr")], _back()]
+        rows = [[B(("✅ " if st["interval_min"] == hh * 60 else "") + f"{fa(hh)} ساعت", callback_data=f"mgr:schi:{hh}", style="success" if st["interval_min"] == hh * 60 else "primary") for hh in (1, 3, 6, 12, 24)],
+                [B(("✅ " if st["daily_time"] == t else "") + fa(t), callback_data=f"mgr:schd:{t.replace(':', '')}", style="success" if st["daily_time"] == t else "primary") for t in ("20:00", "21:00", "22:00", "23:00")],
+                [B(f"🔄 دورهای خودکار: {'✅' if caps['autonomous_rounds'] else '⛔'}", callback_data="mgr:scha", style=_tog(caps['autonomous_rounds'])),
+                 B(f"🛡️ بررسیِ روزانه: {'✅' if caps['daily_review'] else '⛔'}", callback_data="mgr:schr", style=_tog(caps['daily_review']))], _back()]
         await safe_edit_message_text(q, "⚙️ <b>برنامه‌ی دورها</b>\nردیفِ اول: فاصله‌ی دورهای خودکار. ردیفِ دوم: ساعتِ بررسیِ روزانه‌ی امنیت (وقتِ تهران).\n"
                                      "هر دور هزینه‌ی یک اجرای هوش مصنوعی دارد؛ فاصله‌ی بیشتر = هزینه‌ی کمتر.",
                                      reply_markup=M(rows), parse_mode="HTML")
@@ -469,7 +509,16 @@ async def cb(update, ctx, data=None):
         L.append("\n🧠 <b>یادداشت‌های ماندگارِ رهگشا</b>")
         L += [f"• [{h(x['kind'])}] {h(x['text'])}" for x in mem] or ["— هنوز یادداشتی نیست —"]
         await q.answer()
-        await safe_edit_message_text(q, "\n".join(L), reply_markup=M([[B("🗑 پاک‌کردنِ یادداشت‌ها", callback_data="mgr:trc")], _back()]), parse_mode="HTML")
+        await safe_edit_message_text(q, "\n".join(L), reply_markup=M([[B("🗑 پاک‌کردنِ یادداشت‌ها", callback_data="mgr:trc", style="danger")], _back()]), parse_mode="HTML")
+        return
+
+    # ── گزارشِ دوره ──
+    if act == "rep":
+        d = await am.session_digest()
+        await q.answer()
+        body = (d[0] if d else "هنوز هیچ دوره‌ای نبوده.")
+        await safe_edit_message_text(q, "📋 <b>گزارشِ آخرین دوره</b>\n<i>(همین را رهگشا هم در چت به یاد دارد)</i>\n\n" + h(body[:3000]),
+                                     reply_markup=M([[B("📓 ژورنالِ کامل", callback_data="mgr:j:0")], _back()]), parse_mode="HTML")
         return
 
     # ── گفتگو ──
@@ -542,6 +591,7 @@ async def admin_view(update, ctx):
 
 
 def register(app):
+    app.add_handler(CommandHandler("a", cmd_a, filters=filters.ChatType.PRIVATE), group=-6)
     app.add_handler(CallbackQueryHandler(mgr_menu, pattern=r"^mgr_menu$"))
     app.add_handler(CallbackQueryHandler(cb, pattern=r"^mgr:"))
     app.add_handler(CallbackQueryHandler(admin_view, pattern=r"^mgrv:"))

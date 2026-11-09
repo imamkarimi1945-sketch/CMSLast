@@ -55,7 +55,6 @@ def kb_pishva_main():
         InlineKeyboardButton("📅 تقویم", callback_data="menu_calendar")],
         [InlineKeyboardButton("🤖 رهگشا", callback_data="ai_assistant_open"),
         InlineKeyboardButton("🧑‍💻 مدیریت دستیار", callback_data="ai_manage_menu_main")],
-        [InlineKeyboardButton("🤖 رهگشای مدیر ⏱", callback_data="mgr_menu")],
         [InlineKeyboardButton("💡 انتقادات و پیشنهادات", callback_data="menu_feedback")],
     ])
 
@@ -476,8 +475,13 @@ def kb_match_item_actions(mid):
 # بودن (کلی دکمه از دسترسِ سریع خارج شده بود). حالا روی سه صفحه پخش شده،
 # ولی جابه‌جایی بینِ صفحه‌ها فقط یک تعویضِ کیبورد است — هیچ کوئریِ دیتابیسی
 # یا await ای لازم نداره — پس حسِ فوری/آنی داره، نه کند.
+# دکمه‌ی «رهگشای مدیر»: برچسب/رنگش را ai_manager هر ۳۰ ثانیه و با هر تغییرِ وضعیت به‌روز می‌کند
+# (کیبوردها همگام ساخته می‌شوند، پس از این کش می‌خوانند). پیام‌های قبلاً ارسال‌شده تا باز-رندر شدن همان‌طور می‌مانند.
+MGR_BTN = {"label": "⚪️ رهگشای مدیر", "style": "primary"}
+
 _PISHVA_PANEL_PAGES = [
     [
+        [("🤖 رهگشای مدیر", "mgr_menu", None)],
         [("🚦 مدیریت وضعیت", "pishva_status", None), ("⚙️ تنظیمات ربات", "pishva_settings", None)],
         [("🔍 پیگیری اقدامات", "pishva_logs", None), ("📥 درخواست‌های دسترسی", "pishva_requests", None)],
         [("🚫 درخواست‌های اخراج", "pishva_kick_requests", None), ("♟️ بازی‌های مدیران", "pishva_chess_games", None)],
@@ -495,7 +499,7 @@ _PISHVA_PANEL_PAGES = [
          ("🛡️ پنل امنیتی APS", "security_panel", None)],
         [("🧑‍💻 مدیریت دستیار", "ai_manage_menu", None), ("⏰ یادآورها", "pishva_reminders", None)],
         [("🤖 کارهای دستیار", "pishva_ai_scheduled", None), ("🌅 خلاصه صبحگاهی", "pishva_brief", None)],
-        [("🏛️ گروه فرماندهی", "ops_menu", None), ("🤖 رهگشای مدیر", "mgr_menu", None)],
+        [("🏛️ گروه فرماندهی", "ops_menu", None)],
     ],
 ]
 
@@ -509,6 +513,8 @@ def kb_pishva_panel(page: int = 0):
         for label, cb, url in row_def:
             if url:
                 row.append(InlineKeyboardButton(label, url=url))
+            elif cb == "mgr_menu":
+                row.append(InlineKeyboardButton(MGR_BTN["label"], callback_data=cb, style=MGR_BTN["style"]))
             else:
                 row.append(InlineKeyboardButton(label, callback_data=cb, style="primary"))
         rows.append(row)
