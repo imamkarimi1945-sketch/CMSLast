@@ -533,18 +533,27 @@ async def sync_menu_buttons_job(context):
 # عیناً هم‌الگوی static_files در game_server.py برای /webapp — کشِ طولانی‌
 # مدت فقط برای درخواست‌های نسخه‌دار (?v=...)، محافظت در برابرِ path
 # traversal، و fallback به index.html برای مسیرِ ریشه.
+_ASSET_V = {"sig": None, "v": "1"}
+
+
 def _asset_version() -> str:
-    """نسخه‌ی فایل‌های هاب = بزرگ‌ترین زمانِ تغییرِ آن‌ها. قبلاً placeholderِ __V__
-    هرگز جایگزین نمی‌شد، پس کشِ «immutable»ِ فایل‌های ?v=... برای همیشه روی یک نسخه
-    می‌ماند و بعد از هر آپدیت گوشی‌ها فایلِ قدیمی را می‌گرفتند."""
-    latest = 0
+    """نسخه‌ی فایل‌های هاب = هشِ «محتوای» آن‌ها (نه زمانِ تغییر). با mtime، اگر فایل‌های آپدیت‌شده تاریخِ قدیمی‌تری
+    از یکی از فایل‌های موجود داشتند، نسخه عوض نمی‌شد و گوشی‌ها فایلِ قدیمیِ immutable را نگه می‌داشتند
+    (دقیقاً علتِ «دکمه‌ی جدید دیده نمی‌شود»). هش فقط وقتی دوباره محاسبه می‌شود که نام/اندازه/mtime عوض شده باشد."""
+    import hashlib
     try:
-        for fn in os.listdir(HUB_DIR):
-            if fn.endswith((".js", ".css", ".html")):
-                latest = max(latest, int(os.path.getmtime(os.path.join(HUB_DIR, fn))))
+        names = sorted(fn for fn in os.listdir(HUB_DIR) if fn.endswith((".js", ".css", ".html")))
+        sig = tuple((fn, os.path.getsize(os.path.join(HUB_DIR, fn)), int(os.path.getmtime(os.path.join(HUB_DIR, fn)))) for fn in names)
+        if sig != _ASSET_V["sig"]:
+            hh = hashlib.sha1()
+            for fn in names:
+                hh.update(fn.encode())
+                with open(os.path.join(HUB_DIR, fn), "rb") as f:
+                    hh.update(f.read())
+            _ASSET_V.update(sig=sig, v=hh.hexdigest()[:10])
+        return _ASSET_V["v"]
     except OSError:
-        pass
-    return str(latest or 1)
+        return _ASSET_V["v"] or "1"
 
 
 def _hub_index_response():
@@ -604,6 +613,11 @@ def register_hub_routes(app: web.Application):
         app.add_routes(hub_brief.routes)
     except Exception:
         logger.exception("hub_brief routes could not be registered")
+    try:
+        import hub_rgm    # مرکزِ فرماندهیِ رهگشا: رهگشای مدیر + نگهبان (/hub/api/rgm/*)
+        app.add_routes(hub_rgm.routes)
+    except Exception:
+        logger.exception("hub_rgm (مرکز فرماندهیِ رهگشا) routes could not be registered")
     try:
         import hub_chat   # رهگشای واقعی داخلِ هاب (/hub/api/rg/*)
         app.add_routes(hub_chat.routes)
