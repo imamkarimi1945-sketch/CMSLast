@@ -135,6 +135,15 @@ async def block_gate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # کاربر بلاک نیست — فعالیتش رو برای «آنلاین/الان» ثبت می‌کنیم.
     await _track_activity(update, admin)
 
+    # 🛡️ نگهبانِ رهگشا: تهدید در پیام، سیلِ درخواست، فردِ مهارشده (ممکن است ApplicationHandlerStop بدهد)
+    try:
+        import ai_guardian
+        await ai_guardian.on_update(update, ctx, admin)
+    except ApplicationHandlerStop:
+        raise
+    except Exception:
+        logging.getLogger(__name__).debug("guardian on_update failed", exc_info=True)
+
     # حالا دروازه‌ی وضعیت امنیتی APS را بررسی می‌کنیم.
     await aps_gate(update, ctx, user, admin, status)
 

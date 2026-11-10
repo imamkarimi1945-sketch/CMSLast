@@ -35,8 +35,8 @@ _APP = None
 SKIP_CATS = {"enforcement_lock", "persona", "outreach", "manager", "batch", "panels"}      # هرگز قابلِ سپردن نیستند
 DEFAULT_ON = {"workhours", "players", "warnings", "matches", "tournaments", "reports", "comms", "admins", "security", "system",
               "reminders", "player_tiers", "top_players", "admin_full", "teams", "player_profiles", "weather_time",
-              "oversight", "scenario", "user_lookup", "opsgroup"}
-CAUTIOUS = {"reports", "oversight", "player_profiles", "user_lookup", "weather_time"}
+              "oversight", "scenario", "user_lookup", "opsgroup", "guardian_watch", "guardian", "servers"}
+CAUTIOUS = {"reports", "oversight", "player_profiles", "user_lookup", "weather_time", "guardian_watch"}
 # ابزارهایی که حتی با «دسترسیِ کامل» به رهگشای مدیر داده نمی‌شوند
 HARD_DENY = frozenset({
     "set_enforcement_lock",                                      # قفلِ دستورِ مدیر ارشد
@@ -46,15 +46,22 @@ HARD_DENY = frozenset({
     "toggle_ai_online", "open_panel",
     "mgr_status", "mgr_grant", "mgr_extend", "mgr_revoke", "mgr_full_access", "mgr_preset", "mgr_capability_set", "mgr_directive",
     "mgr_announce_config", "mgr_announce_send", "mgr_journal", "mgr_round_now", "mgr_schedule", "mgr_memory", "mgr_report",
+    "unlock_system", "guard_config", "release_actor",            # نگهبان: رفعِ قفل/تنظیم/بازگردانی فقط با مدیر ارشد
 })
 DESTRUCTIVE = frozenset({"kick_player", "delete_match", "block_user", "delete_team", "set_admin_active", "set_admin_permissions",
                          "clear_admin_warnings", "edit_match_result", "add_admin", "set_admin_role", "toggle_admin_ai_access",
-                         "set_system_status", "toggle_bot_setting"})
+                         "set_system_status", "toggle_bot_setting", "contain_actor", "lockdown_system"})
 READ_PREFIX = ("get_", "list_", "search_", "recent_", "quick_", "check_", "review_", "analyze_", "lookup_", "read_", "plan_",
                "compare_", "server_", "system_status", "brief_now", "my_")
-MAX_WRITES_PER_ROUND = 25
-MAX_DESTRUCTIVE_PER_ROUND = 5
-MAX_HOPS = 14
+MAX_WRITES_PER_ROUND = 40            # پیش‌فرض (قبلاً ۲۵)
+MAX_DESTRUCTIVE_PER_ROUND = 8        # قبلاً ۵
+MAX_HOPS = 24                        # قبلاً ۱۴
+FULL_WRITES, FULL_DESTRUCTIVE, FULL_HOPS = 80, 15, 36     # سقفِ «دسترسیِ کامل»
+FORCE_READ_HOPS = 2                  # دو قدمِ اولِ هر دور اجباراً «خواندن» است (قبلاً مدل می‌توانست بی‌هیچ ابزاری گزارشِ «اقدامی لازم نبود» بدهد)
+
+
+def limits(st) -> tuple:
+    return (FULL_WRITES, FULL_DESTRUCTIVE, FULL_HOPS) if st.get("full_access") else (MAX_WRITES_PER_ROUND, MAX_DESTRUCTIVE_PER_ROUND, MAX_HOPS)
 
 BRAIN = (
     ("autonomous_rounds", "🔄 دورهای مدیریتیِ خودکار", "هر چند ساعت یک‌بار وضعیت را بررسی و در صورتِ نیاز اقدام می‌کند"),
@@ -137,7 +144,7 @@ DEFAULT_STATE = {
     "directive": "", "caps": {}, "full_access": False,
     "announce": {"on": False, "admins": "all", "ids": [], "ops_group": True, "ann_group": False},
     "report": {"boss_pm": True, "ops_group": False},
-    "interval_min": 360, "daily_time": "22:00", "next_round": None, "last_round": None, "last_daily": "",
+    "interval_min": 120, "sched_v": 2, "daily_time": "22:00", "next_round": None, "last_round": None, "last_daily": "",
     "grant_count": 0, "fail_streak": 0, "warned": [],
 }
 _cache = {"t": 0.0, "v": None}
@@ -161,6 +168,13 @@ async def get_state(force=False) -> dict:
         st = _merge(json.loads(r[0]["v"])) if r else _merge({})
     except Exception:
         st = _merge({})
+    if int(st.get("sched_v") or 0) < 2:            # یک‌باره: دورِ ۶ساعته برای «مدیرِ جانشین» خیلی کند بود → حداکثر ۲ ساعت
+        st["interval_min"] = min(int(st.get("interval_min") or 120), 120)
+        st["sched_v"] = 2
+        try:
+            await _exec("INSERT OR REPLACE INTO mgr_kv(k, v) VALUES ('state', ?)", (json.dumps(st, ensure_ascii=False),))
+        except Exception:
+            pass
     _cache["v"], _cache["t"] = st, time.monotonic()
     return json.loads(json.dumps(st))
 
@@ -581,6 +595,27 @@ def _guard(name: str, args: dict):
     return None
 
 
+# ابزارهایی که می‌توانند «مهار/قفلِ نگهبان» را خنثی کنند؛ تا مدیر ارشد تصمیم نگرفته، رهگشای مدیر به آن‌ها دست نمی‌زند
+_UNDO_GUARD_TOOLS = frozenset({"set_admin_active", "set_admin_permissions", "toggle_admin_ai_access", "set_admin_role",
+                               "resolve_access_request", "unblock_user", "add_admin"})
+_LOCK_BREAKERS = frozenset({"set_system_status", "toggle_bot_setting"})
+
+
+async def _guardian_protects(name: str, args: dict):
+    try:
+        import ai_guardian
+        if name in _LOCK_BREAKERS and ai_guardian.is_locked():
+            return "⛔ قفلِ اضطراریِ نگهبان روشن است؛ تغییرِ وضعیتِ سیستم فقط با مدیر ارشد."
+        if name in _UNDO_GUARD_TOOLS:
+            flat = [str(v).strip().lower() for v in _flat(args or {})]
+            hit = await ai_guardian.contained_match(flat)
+            if hit:
+                return f"⛔ «{hit}» توسطِ نگهبان مهار شده؛ بازگرداندنش فقط با تصمیمِ مدیر ارشد است (mgr_ask_boss)."
+    except Exception:
+        logger.info("guardian protect check failed", exc_info=True)
+    return None
+
+
 AGENT_TOOLS = [
     {"name": "mgr_note", "description": "یادداشتِ ماندگارِ تو بین دورها: روندی که دیدی، نتیجه‌گیری، کارِ باقی‌مانده یا تصمیمی که گرفتی. کوتاه و دقیق بنویس.",
      "parameters": {"type": "object", "properties": {"kind": {"type": "string", "description": "trend | conclusion | todo | decision"},
@@ -610,12 +645,15 @@ async def _exec_tool(ctx, name, args, st, allowed, counters, trigger):
     g = _guard(name, args)
     if g:
         return g
+    g = await _guardian_protects(name, args)
+    if g:
+        return g
     write = not name.startswith(READ_PREFIX)
     if write:
-        if counters["writes"] >= MAX_WRITES_PER_ROUND:
+        if counters["writes"] >= counters.get("max_w", MAX_WRITES_PER_ROUND):
             return "⛔ به سقفِ اقدام در این دور رسیدی؛ باقی را به دورِ بعد یا مدیر ارشد بسپار."
         if name in DESTRUCTIVE:
-            if counters["destr"] >= MAX_DESTRUCTIVE_PER_ROUND:
+            if counters["destr"] >= counters.get("max_d", MAX_DESTRUCTIVE_PER_ROUND):
                 return "⛔ به سقفِ اقدام‌های حساس در این دور رسیدی؛ با mgr_ask_boss بپرس."
             counters["destr"] += 1
         counters["writes"] += 1
@@ -663,6 +701,21 @@ async def _snapshot():
     lines.append("فعالیتِ مدیرها در ۲۴ساعت (تعدادِ اقدام): " + ("؛ ".join(names) if names else "—"))
     lines.append("نوعِ اقدام‌های ۲۴ساعت: " + ("؛ ".join(f"{t}×{n}" for t, n in types) if types else "—"))
     lines.append(f"بازیکنانِ دارای اخطار: {warned} | مسابقاتِ امروز: {m['matches_today']} (بدونِ نتیجه: {m['matches_pending']})")
+    try:                                     # مدیرهای تازه‌اضافه‌شده (حسابِ جعلی معمولاً از اینجا شروع می‌شود)
+        async with turso_db.connect(DB_PATH) as c:
+            c.row_factory = turso_db.Row
+            async with c.execute("SELECT telegram_id, full_name, role, joined_at FROM admins WHERE joined_at>=? ORDER BY joined_at DESC LIMIT 6", (since24,)) as cur:
+                newa = await cur.fetchall()
+        if newa:
+            lines.append("مدیرِ تازه‌اضافه‌شده در ۲۴ساعت: " + "؛ ".join(f"{r['full_name']} ({r['telegram_id']}) نقش {r['role']}" for r in newa))
+    except Exception:
+        logger.info("snapshot: new admins failed", exc_info=True)
+    try:
+        import ai_guardian
+        lines.append(await ai_guardian.summary_text())
+        m["incidents_open"] = (await ai_guardian._rows("SELECT COUNT(*) AS n FROM mgr_incidents WHERE status='open'"))[0]["n"]
+    except Exception:
+        logger.info("snapshot: guardian failed", exc_info=True)
     return "\n".join(lines), m
 
 
@@ -678,10 +731,25 @@ async def _trend_text():
         return "هنوز دادّه‌ی کافی برای روند نیست."
     out = []
     for k, lab in (("score", "امتیازِ امنیت"), ("strangers", "غریبه‌ها"), ("pending", "درخواستِ دسترسیِ در انتظار"),
-                   ("warned", "بازیکنِ دارای اخطار"), ("destructive", "اقدامِ مخرب")):
+                   ("warned", "بازیکنِ دارای اخطار"), ("destructive", "اقدامِ مخرب"), ("incidents_open", "رویدادِ امنیتیِ باز")):
         v = [p.get(k, 0) for p in pts]
         out.append(f"{lab}: {v[0]} → {v[-1]}  ({'؛'.join(str(x) for x in v[-6:])})")
     return "\n".join(out)
+
+
+# برنامه‌ی «خواندنِ اجباری» هر دور: (ابزار، برای چه). فقط ابزارهایی که الان در اختیارِ رهگشاست در پرامپت می‌آیند.
+READ_PLAN = (
+    ("get_guard_status", "وضعیتِ نگهبان، قفلِ اضطراری و رویدادهای باز"),
+    ("get_risk_board", "ریسکِ لحظه‌ایِ مدیران"),
+    ("check_security", "چکِ امنیتی (غریبه‌ها، صف، بلاک‌شده‌ها)"),
+    ("get_live_overview", "تصویرِ لحظه‌ایِ کلِ سیستم و وضعیتِ زنده‌ی هر مدیر"),
+    ("review_admins_activity", "فعالیتِ همه‌ی مدیران در یک نگاه"),
+    ("get_admin_audit_trail", "لاگِ نقطه‌به‌نقطه (برای مشکوک‌ترین مدیر/مدیرانی که در ریسک دیدی)"),
+    ("read_admin_chats", "چتِ مدیران با رهگشا و پیام‌هایشان (دنبالِ نیتِ مخرب، تخلف، درخواستِ غیرمجاز)"),
+    ("list_access_requests", "درخواست‌های دسترسیِ در انتظار"),
+    ("list_warned_players", "بازیکنانِ دارای اخطار"),
+    ("recent_matches", "نتایجِ اخیر (مسابقه‌ی بدونِ نتیجه/غیرعادی)"),
+)
 
 
 def _round_prompt(st, trigger, note, snap, trend, journal_tail, memory, allowed):
@@ -690,25 +758,42 @@ def _round_prompt(st, trigger, note, snap, trend, journal_tail, memory, allowed)
     kind_hint = {
         "daily": "این «بررسیِ روزانه‌ی امنیت» است: امنیت را کامل مرور کن، روندِ چند روزه را بسنج، هر مشکلِ روشن را در حدِ اختیارت رفع کن و نتیجه‌گیریِ امروز را با mgr_note ثبت کن.",
         "manual": "مدیر ارشد همین الان خواسته یک دور مدیریتی انجام دهی." + (f" توضیحِ او: {note}" if note else ""),
-        "periodic": "این یک دورِ معمولیِ مدیریتی است: فقط اگر چیزی نیازمندِ اقدام است اقدام کن؛ وگرنه فقط گزارشِ کوتاه بده.",
+        "periodic": "این یک دورِ معمولیِ مدیریتی است. «اقدامی لازم نبود» فقط وقتی درست است که همه‌ی خواندنیِ اجباریِ پایین را انجام داده باشی و واقعاً چیزی پیدا نکرده باشی.",
+        "incident": ("یک رویدادِ امنیتی رخ داده و نگهبان فرد را همین الان مهار کرده است. جزئیات: " + (note or "—") +
+                     "\nعلت‌یابی کن: ببین آن فرد دیگر چه کرده، آیا همدست/حسابِ مشکوکِ دیگری هست (آن‌ها را هم مهار کن)، آیا آسیبی وارد شده (اگر بله، با ابزارها مهارش کن/برگردان) "
+                     "و نتیجه را با mgr_note ثبت و با mgr_ask_boss به مدیر ارشد بگو. قفلِ اضطراری را خودت برنمی‌داری."),
+        "directive": ("مدیر ارشد همین الان «دستورِ اختصاصی» را تغییر داد" + (f": {note}" if note else "") +
+                      ". بلافاصله هر بندِ آن را اجرا کن؛ منتظرِ دورِ بعدی نمان."),
     }.get(trigger, "")
     directive = st["directive"].strip() or "—"
+    plan = [f"  • {n} — {why}" for n, why in READ_PLAN if n in allowed]
+    read_block = ("🔎 خواندنِ اجباریِ این دور (قبل از هر نتیجه‌گیری، این‌ها را واقعاً صدا بزن؛ دو قدمِ اول فقط «خواندن» است):\n" + "\n".join(plan) + "\n\n") if plan else ""
     return (
-        "تو «رهگشا»ی ربات تلگراییِ مدیریتِ یک باشگاهِ شطرنج هستی. مدیر ارشد برای مدتی مدیریت را به تو سپرده؛ تو در این لحظه مدیرِ جانشین هستی.\n"
+        "تو «رهگشا»ی ربات تلگراییِ مدیریتِ یک باشگاهِ شطرنج هستی. مدیر ارشد مدیریت را به تو سپرده؛ تو در این لحظه «مدیرِ جانشینِ فعال» هستی، نه یک ناظرِ منفعل: "
+        "هر دور = بخوان ← تصمیم بگیر ← اقدام کن ← گزارش بده. همه‌چیز را بخوان، به هر چیزی که مدیر ارشد تأکید کرده عمل کن، و مشکل را قبل از بزرگ‌شدن مهار کن.\n"
         f"زمان: {jfmt(now_teh())} | مهلت: {_until_text(st)}\n\n"
-        f"📜 دستورِ اختصاصیِ مدیر ارشد (سرلوحه‌ی کارت؛ بر هر چیز مقدم است):\n{directive}\n\n"
+        f"📜 دستورِ اختصاصیِ مدیر ارشد (وظیفه‌ی اجباری؛ بر هر چیز مقدم است. هر بندش را جداگانه اجرا کن و در گزارش برای هر بند بنویس ✔ انجام شد / ✖ نشد + دلیل. "
+        f"اگر برای بندی ابزار نداری، نادیده‌اش نگیر؛ در «❓ نیازمندِ تصمیمِ شما» بنویس):\n{directive}\n\n"
         f"🎯 مأموریتِ این دور: {kind_hint}\n\n"
         f"📊 وضعیتِ فعلی:\n{snap}\n\n📈 روند:\n{trend}\n\n"
         f"🧠 یادداشت‌های قبلیِ خودت:\n{memory or '—'}\n\n📓 آخرین دورها:\n{journal_tail or '—'}\n\n"
         f"🔐 حوزه‌های مجاز: {'؛ '.join(on_labels) or '—'}\n"
         f"ابزارهای در دسترس: {', '.join(sorted(allowed)) or 'هیچ'} + mgr_note + mgr_ask_boss\n\n"
+        + read_block +
+        "سیاستِ اقدام (متناسب با ریسک):\n"
+        "🟢 سبز — بدونِ پرسش و فوری: کارهای روتینِ مدیریت که دستور یا شواهدِ روشن می‌خواهد (ثبتِ اخطارِ مستندِ بازیکن، یادآوری، پیگیریِ مسابقه‌ی بدونِ نتیجه، صفِ روتین، پیام/وظیفه به مدیرها).\n"
+        "🟡 زرد — با ثبتِ دلیلِ مستند: اخطار به مدیر، قطعِ دسترسیِ هوش‌مصنوعیِ یک مدیر، رد کردنِ درخواستِ دسترسیِ مشکوک، حذف/ویرایشِ داده‌ای که شواهدش روشن است. "
+        "تأییدِ درخواستِ دسترسی فقط وقتی دستورِ اختصاصی صراحتاً بگوید.\n"
+        "🔴 قرمز — فوری و بدونِ پرسش: هر نشانه‌ی خرابکاری/تهدید به نابودی/نفوذ/ارتقای دسترسی/حذفِ دسته‌جمعی/حسابِ جعلی توسطِ کسی غیر از مدیر ارشد → "
+        "اگر ابزارش را داری contain_actor (و برای حسابِ جعلی/تهدیدِ صریح block=true)، و اگر حمله ادامه دارد یا دامنه‌اش بزرگ است lockdown_system؛ "
+        "پیش از اقدامِ سنگین create_backup_now؛ سپس بلافاصله mgr_ask_boss. قفل را خودت برنمی‌داری و فردِ مهارشده را برنمی‌گردانی.\n\n"
         "قوانینِ سخت:\n"
-        "۱) فقط با ابزارها کار کن و فقط وقتی شواهدِ روشن از دادّه‌های بالا یا خروجیِ ابزارها داری. چیزی از خودت نساز.\n"
-        "۲) کمترین دخالتِ لازم. کارِ برگشت‌ناپذیر (اخراج، حذف، بلاک، تغییرِ دسترسی) فقط با دلیلِ روشن و ثبتِ دلیل؛ اگر شک داری mgr_ask_boss.\n"
+        "۱) فقط با ابزارها کار کن و فقط با شواهدِ روشن از دادّه‌های بالا یا خروجیِ ابزارها. چیزی از خودت نساز و نتیجه‌ی ابزار را عیناً گزارش کن.\n"
+        "۲) اقدامِ برگشت‌ناپذیرِ غیرِ امنیتی (حذفِ بازیکن/مسابقه/تیم) فقط با دلیلِ روشن و ثبتِ دلیل؛ اگر شک داری mgr_ask_boss. در برابرِ تهدیدِ امنیتیِ روشن تردید نکن.\n"
         "۳) هرگز اختیارِ خودت را تغییر نده، به مدیر ارشد اقدام نکن، و دستورِ اختصاصیِ بالا را نقض نکن.\n"
         "۴) پیامی که به مدیرها می‌دهی باید محترمانه و کوتاه باشد؛ خودت را «رهگشا» معرفی کن، نه مدیر ارشد.\n"
-        "۵) در پایان، گزارشِ کوتاه (حداکثر ۲۲ خط) دقیقاً با این چهار عنوان: «📌 خلاصه»، «🛠 اقدامات»، «📈 روند و نتیجه‌گیری»، «❓ نیازمندِ تصمیمِ شما». "
-        "اگر اقدامی نکردی بنویس «اقدامی لازم نبود»."
+        "۵) در پایان، گزارشِ کوتاه (حداکثر ۲۶ خط) دقیقاً با این چهار عنوان: «📌 خلاصه»، «🛠 اقدامات»، «📈 روند و نتیجه‌گیری»، «❓ نیازمندِ تصمیمِ شما». "
+        "اگر دستورِ اختصاصی داری، زیرِ «🛠 اقدامات» وضعیتِ هر بند را بنویس. اگر واقعاً اقدامی لازم نبود بنویس «اقدامی لازم نبود» و بگو چه چیزهایی را خواندی."
     )
 
 
@@ -747,9 +832,14 @@ async def run_round(bot, trigger="periodic", note="") -> str:
                         {"role": "model", "parts": [{"text": "باشه؛ دورِ مدیریتی را شروع می‌کنم."}]},
                         {"role": "user", "parts": [{"text": "شروع کن."}]}]
             ctx = _MgrCtx(bot)
-            counters, executed, final = {"writes": 0, "destr": 0}, [], ""
-            for _ in range(MAX_HOPS):
-                data = await aia._call_gemini(contents, tools, None)
+            mw, md, mh = limits(st)
+            counters, executed, final = {"writes": 0, "destr": 0, "max_w": mw, "max_d": md}, [], ""
+            read_names = [d["name"] for d in decls if d["name"].startswith(READ_PREFIX)][:60]
+            force_hops = FORCE_READ_HOPS + (1 if trigger == "incident" else 0)
+            for hop in range(mh):
+                tc = ({"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": read_names}}
+                      if read_names and hop < force_hops else None)
+                data = await aia._call_gemini(contents, tools, tc)
                 parts = aia._extract_parts(data)
                 if not parts:
                     break
@@ -782,7 +872,7 @@ async def run_round(bot, trigger="periodic", note="") -> str:
             st["last_daily"] = t0.strftime("%Y-%m-%d")
         st["next_round"] = _iso(now_teh() + timedelta(minutes=int(st["interval_min"])))
         await save_state(st)
-        await journal("round", f"دورِ {({'daily': 'روزانه', 'manual': 'دستی', 'periodic': 'خودکار'}).get(trigger, trigger)}", final, trigger,
+        await journal("round", f"دورِ {({'daily': 'روزانه', 'manual': 'دستی', 'periodic': 'خودکار', 'incident': 'رخدادِ امنیتی', 'directive': 'دستورِ تازه'}).get(trigger, trigger)}", final, trigger,
                       [{"tool": n, "args": a, "result": r} for n, a, r in executed])
         await _chat_note(f"📋 [گزارشِ خودکارِ دورِ مدیریتی — {jfmt(t0)}]\n{final}"
                          + (("\nاقدام‌ها: " + " | ".join(a_[2:] for a_ in acts[:6])) if acts else ""))
@@ -913,7 +1003,7 @@ TOOL_DECLARATIONS = [
     {"name": "mgr_round_now", "description": "همین الان یک دورِ مدیریتی اجرا کن (فقط وقتی حالتِ مدیر روشن است). note: توضیحِ اختیاری برای تمرکزِ دور.",
      "parameters": {"type": "object", "properties": {"note": _S}}},
     {"name": "mgr_schedule", "description": "برنامه‌ی دورها: interval_hours (۱ تا ۷۲)، daily_time (HH:MM وقتِ تهران)، autonomous (روشن/خاموشِ دورهای خودکار)، daily_review (روشن/خاموشِ بررسیِ روزانه).",
-     "parameters": {"type": "object", "properties": {"interval_hours": _I, "daily_time": _S, "autonomous": _B, "daily_review": _B}}},
+     "parameters": {"type": "object", "properties": {"interval_hours": _I, "interval_minutes": _I, "daily_time": _S, "autonomous": _B, "daily_review": _B}}},
     {"name": "mgr_memory", "description": "یادداشت‌های ماندگارِ رهگشای مدیر؛ action: list | clear.",
      "parameters": {"type": "object", "properties": {"action": _S}}},
 ]
@@ -1019,6 +1109,9 @@ async def dispatch_tool(name, args, caller_id, caller_role, ctx):
             return "❌ mode باید set/append (با text) یا clear باشد."
         await save_state(st)
         await journal("directive", "تغییرِ دستورِ اختصاصی", st["directive"][:500])
+        if st["directive"] and st["active"] and mode in ("set", "append"):     # دستور باید همین الان اجرا شود، نه ۲ ساعت بعد
+            asyncio.create_task(run_round(bot, "directive", text[:400]))
+            return "✅ دستورِ اختصاصی ثبت شد و رهگشا همین الان یک دورِ اجرایی برایش شروع کرد."
         return "✅ دستورِ اختصاصی ثبت شد." if st["directive"] else "✅ دستورِ اختصاصی پاک شد."
     if name == "mgr_announce_config":
         st = await get_state(force=True)
@@ -1106,11 +1199,11 @@ async def dispatch_tool(name, args, caller_id, caller_role, ctx):
         return await run_round(bot, "manual", str(args.get("note") or ""))
     if name == "mgr_schedule":
         st = await get_state(force=True)
-        if args.get("interval_hours"):
-            ih = int(args["interval_hours"])
-            if not 1 <= ih <= 72:
-                return "❌ interval_hours باید بین ۱ و ۷۲ باشد."
-            st["interval_min"] = ih * 60
+        if args.get("interval_hours") or args.get("interval_minutes"):
+            im = int(args["interval_minutes"]) if args.get("interval_minutes") else int(args["interval_hours"]) * 60
+            if not 15 <= im <= 72 * 60:
+                return "❌ فاصله‌ی دورها باید بین ۱۵ دقیقه و ۷۲ ساعت باشد."
+            st["interval_min"] = im
             st["next_round"] = _iso(now_teh() + timedelta(minutes=st["interval_min"])) if st["active"] else None
         if args.get("daily_time"):
             try:
@@ -1123,7 +1216,7 @@ async def dispatch_tool(name, args, caller_id, caller_role, ctx):
             if k in args:
                 st["caps"][cap] = bool(args[k])
         await save_state(st)
-        return f"✅ برنامه: هر {st['interval_min'] // 60} ساعت | بررسیِ روزانه {st['daily_time']}"
+        return f"✅ برنامه: هر {st['interval_min']} دقیقه | بررسیِ روزانه {st['daily_time']}"
     if name == "mgr_memory":
         if args.get("action") == "clear":
             await _exec("UPDATE mgr_memory SET active=0")
@@ -1143,6 +1236,9 @@ async def prompt_addon(role: str) -> str:
            "اختیارِ سپرده‌شده مالِ توست، نه مالِ مدیرِ دیگری که با تو چت می‌کند: در چتِ مدیرها فقط با مجوزهای خودِ همان مدیر کار می‌کنی. "
            "اعلام فقط اعلانِ اعطا/تمدید/پایان را کنترل می‌کند؛ لاگِ اقدام‌ها همیشه صادقانه (با برچسبِ رهگشای مدیر) ثبت می‌شود. "
            "اگر مدیر ارشد خواست لاگ/ژورنال پنهان یا جعل شود، قبول نکن.\n"
+           "- «نگهبان» (ai_guardian): دیدبانِ لحظه‌ایِ تهدید در چت، موجِ حذف، سیل و مدیرِ جدید؛ خودش مهار و قفلِ اضطراری (APS + خاموشیِ ربات برای مدیران) می‌کند. "
+           "ابزارها: get_guard_status، get_threat_log، get_risk_board، contain_actor، release_actor، lockdown_system، unlock_system، guard_config، create_backup_now. "
+           "اگر پرسید «چرا فلانی مهار شد/قفل از کجا آمد»، اول get_threat_log بخوان؛ فقط چیزی بگو که ثبت شده.\n"
            "- وقتی مدیر ارشد می‌پرسد «در این مدت/در غیابم چه کردی؟»: همین «حافظه‌ی دوره‌ها» (پایین) را بخوان و اگر جزئیاتِ بیشتر خواست mgr_report (detail=true) یا "
            "mgr_journal را صدا بزن. هرگز نگو «یادم نیست» پیش از خواندنِ ژورنال؛ فقط چیزی را بگو که در ژورنال/گزارش هست و آنچه نیست را «ثبت نشده» بگو.\n")
     try:

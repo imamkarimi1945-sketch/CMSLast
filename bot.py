@@ -356,6 +356,8 @@ async def post_init(application: Application) -> None:
         ops_group.start(application)
         import ai_manager
         ai_manager.start(application)
+        import ai_guardian
+        ai_guardian.start(application)
     except Exception as e:
         logger.warning(f"Could not start persona flusher: {e}")
 
@@ -641,6 +643,8 @@ def build_application():
         ops_panel.register(app)
         import ai_manager_panel
         ai_manager_panel.register(app)
+        import ai_guardian
+        ai_guardian.register(app)
     except Exception as _e:
         logger.warning(f"ai_proactive register failed: {_e}")
 

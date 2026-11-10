@@ -77,6 +77,14 @@ def _caps_summary(st):
     return sum(1 for d in cats if caps[d["key"]]), len(cats)
 
 
+def _gd_locked() -> bool:
+    try:
+        import ai_guardian
+        return ai_guardian.is_locked()
+    except Exception:
+        return False
+
+
 async def render_main():
     st = await am.get_state(force=True)
     t, u = am.timer_of(st), await am.usage()
@@ -134,7 +142,9 @@ async def render_main():
         kb.append([B("📈 روند و یادداشت‌ها", callback_data="mgr:tr"), B(f"⚙️ دورها • هر {fa(st['interval_min'] // 60)}س", callback_data="mgr:sch")])
     else:
         kb.append([B("📈 روند و یادداشت‌ها", callback_data="mgr:tr")])
-    kb.append([B("💬 گفتگو با رهگشا", callback_data="mgr:chat"), B("🔄 بازخوانی", callback_data="mgr:ref")])
+    kb.append([B("🛡️ نگهبان" + (" 🔴" if _gd_locked() else ""), callback_data="guard:menu", style="danger" if _gd_locked() else "primary"),
+               B("💬 گفتگو با رهگشا", callback_data="mgr:chat")])
+    kb.append([B("🔄 بازخوانی", callback_data="mgr:ref")])
     kb.append([B("🔙 پنل مدیر ارشد", callback_data="menu_pishva", style="danger")])
     return "\n".join(L), M(kb)
 
@@ -434,7 +444,7 @@ async def cb(update, ctx, data=None):
             await am.save_state(st)
         caps = am.eff_caps(st)
         await q.answer()
-        rows = [[B(("✅ " if st["interval_min"] == hh * 60 else "") + f"{fa(hh)} ساعت", callback_data=f"mgr:schi:{hh}", style="success" if st["interval_min"] == hh * 60 else "primary") for hh in (1, 3, 6, 12, 24)],
+        rows = [[B(("✅ " if st["interval_min"] == hh * 60 else "") + f"{fa(hh)} ساعت", callback_data=f"mgr:schi:{hh}", style="success" if st["interval_min"] == hh * 60 else "primary") for hh in (1, 2, 3, 6, 12, 24)],
                 [B(("✅ " if st["daily_time"] == t else "") + fa(t), callback_data=f"mgr:schd:{t.replace(':', '')}", style="success" if st["daily_time"] == t else "primary") for t in ("20:00", "21:00", "22:00", "23:00")],
                 [B(f"🔄 دورهای خودکار: {'✅' if caps['autonomous_rounds'] else '⛔'}", callback_data="mgr:scha", style=_tog(caps['autonomous_rounds'])),
                  B(f"🛡️ بررسیِ روزانه: {'✅' if caps['daily_review'] else '⛔'}", callback_data="mgr:schr", style=_tog(caps['daily_review']))], _back()]

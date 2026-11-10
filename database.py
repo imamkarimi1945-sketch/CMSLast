@@ -2613,6 +2613,16 @@ async def log_action(admin_id, action_type, description, target_id=None, snapsho
 
     _fire_and_forget(_write())
     _fire_and_forget(_ops_mirror("on_log", admin_id, action_type, description, target_id))
+    _fire_and_forget(_guardian_mirror(admin_id, action_type, description, target_id))
+
+
+async def _guardian_mirror(*args):
+    """«نگهبانِ رهگشا» (ai_guardian): هر اقدامِ ثبت‌شده را لحظه‌ای می‌بیند تا موجِ حذف/خرابکاری را همان‌موقع بگیرد. خطا هرگز کارِ اصلی را خراب نمی‌کند."""
+    try:
+        import ai_guardian
+        await ai_guardian.on_log(*args)
+    except Exception:
+        pass
 
 
 async def _ops_mirror(fn_name, *args):

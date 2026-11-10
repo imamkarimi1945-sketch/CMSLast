@@ -32,6 +32,7 @@ import ai_persona
 import ai_memory
 import knowledge_base
 import ai_shared
+import ai_guardian
 
 logger = logging.getLogger(__name__)
 
@@ -470,6 +471,7 @@ def _system_prompt(role: str, display_name: str = "", memory_rows=None, user_tex
         + delegate_block
         + memory_block
         + knowledge_block
+        + ("" if role == ROLE_PISHVA else ai_guardian.SECURITY_PROMPT)
     )
 
 
