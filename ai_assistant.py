@@ -32,7 +32,6 @@ import ai_persona
 import ai_memory
 import knowledge_base
 import ai_shared
-import ai_guardian
 
 logger = logging.getLogger(__name__)
 
@@ -292,16 +291,6 @@ def _system_prompt(role: str, display_name: str = "", memory_rows=None, user_tex
         "مدیر خاص) و assign_task (اعطای وظیفه‌ی مشخص با عنوان و توضیح) استفاده کن — نه فقط قول "
         "بده که این کار رو می‌کنی. اگه چند مدیر باید خبردار بشن، برای هرکدوم جدا این تابع‌ها رو "
         "صدا بزن.\n"
-        "- «گروه فرماندهی»: یک سوپرگروهِ تاپیک‌دار که ربات و تو کامل کنترلش می‌کنید. تاپیک‌های پیش‌فرض: security (پنل زنده‌ی امنیت)، "
-        "players (دستورات اخطار/یادداشت)، announce، access (درخواست‌های دسترسی با دکمه)، strangers (کارتِ زنده‌ی هر غریبه)، "
-        "matches (گزارش روزانه)، rahgosha، logs (هر اقدام یک پیام + هشتگ)، servers، admins. رویدادها خودکار طبق جدولِ مسیردهی به تاپیکِ خودشان "
-        "می‌روند. ابزارها: ops_status (قبل از هر تغییر بگیر)، ops_post، ops_topic_create/edit/delete، ops_route_set (چه رویدادی به کدام تاپیک)، "
-        "ops_matches_time_set، ops_digest_now، ops_security_review، ops_refresh. دستورهای تاپیکِ players را هم می‌توانی خودت بسازی/ویرایش/حذف کنی: ops_cmd_create/edit/delete/list (نوع reply=جوابِ ثابت، alias=میان‌بُر برای دستورِ اصلی، ai=پرسش از رهگشا؛ هم «/اسم» هم کلمه‌ی فارسی). اگر مدیر ارشد فقط گفت «یه دستور بساز» و جزئیات نداد، بپرس چه کاری/چه ورودی‌ای/چه خروجی‌ای. وقتی مدیر ارشد داده‌ی جدیدی داد، تصمیم بگیر کدام تاپیکِ "
-        "موجود مناسب است یا تاپیکِ تازه بساز و مسیر را وصل کن؛ ops_topic_delete همیشه تأیید می‌گیرد. اگر گروه وصل نیست مراحل را از ops_status بگو.\n"
-        "- پیام به کسی که مدیر ثبت‌شده نیست (دسترسیش تأیید نشده یا فقط ربات رو استارت کرده): message_admin پیداش نمی‌کنه؛ "
-        "از message_contact (فوری) یا schedule_outreach (یک‌بار/روزانه/هفتگی، متن ثابت یا موضوع‌های چرخشی) استفاده کن. "
-        "پیام فقط از «رهگشا» دیده می‌شه، پس اسم مدیر ارشد رو توی متن نیار. این دو ابزار همیشه اول از مدیر ارشد تأیید می‌گیرن؛ "
-        "فقط وقتی نتیجه‌ی ابزار «ارسال شد/ثبت شد» گفت بگو انجام شده. اگه طرف هرگز ربات رو استارت نکرده، صادقانه بگو نمی‌شه.\n"
         "- برای این کار باید بدونی چه مدیرهایی هستن؛ لازم شد اول از list_admins استفاده کن تا "
         "اسم/نقش دقیق‌شون رو داشته باشی، بعد پیام یا وظیفه رو براشون بفرست.\n"
         "- اگه مدیر ارشد گفت «در نبودم کارها رو بچرخون» بدون جزئیات بیشتر، از خودش بپرس دقیقاً "
@@ -471,7 +460,6 @@ def _system_prompt(role: str, display_name: str = "", memory_rows=None, user_tex
         + delegate_block
         + memory_block
         + knowledge_block
-        + ("" if role == ROLE_PISHVA else ai_guardian.SECURITY_PROMPT)
     )
 
 
@@ -609,12 +597,6 @@ async def ai_assistant_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def ai_assistant_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
-    # چت با رهگشا فقط در پیوی است. «ai_mode» توی user_data نگه‌داری می‌شه و user_data مالِ خودِ کاربره
-    # (نه مالِ چت)، پس بدون این چک، کسی که توی پیوی رهگشا رو فعال کرده بود توی هر گروهی هم که
-    # ربات عضوش بود جواب می‌گرفت.
-    chat = update.effective_chat
-    if chat is None or (chat.type != "private" and not ctx.user_data.get("_ops_topic_call")):
-        return      # استثنا: تاپیکِ «رهگشا» در گروهِ فرماندهی (ops_group._rahgosha)
     text = update.message.text.strip()
     uid = update.effective_user.id
 
@@ -693,11 +675,6 @@ async def ai_assistant_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     visibility_levels = ["all", "pishva"] if role == ROLE_PISHVA else ["all"]
     memory_rows = await ai_memory.recent(visibility_levels, limit=8)
     system_prompt = _system_prompt(role, display_name, memory_rows, user_text=text)
-    try:
-        import ai_manager
-        system_prompt += await ai_manager.prompt_addon(role)    # «رهگشای مدیر»: ابزارها + وضعیتِ فعلی (فقط برای مدیر ارشد)
-    except Exception:
-        logger.info("manager prompt addon failed", exc_info=True)
     system_prompt += await _server_addon()   # چندسرور: هویت/پرامپتِ کلی و اختصاصیِ سرورِ جاری
     _prefs = await ai_persona.get_prefs(uid)
     _persona_block, _mem_used = await ai_persona.build_block_ex(uid, role, _prefs)

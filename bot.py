@@ -247,12 +247,6 @@ async def post_init(application: Application) -> None:
         logger.exception("servers.load failed")
 
     try:
-        import sheets_sync
-        await sheets_sync.start(application)
-    except Exception as e:
-        logger.warning(f"sheets_sync start failed: {e}")
-
-    try:
         from elo import ensure_elo_table
         await ensure_elo_table()
         logger.info("Elo tables ready.")
@@ -277,9 +271,6 @@ async def post_init(application: Application) -> None:
         BotCommand("ss", "📋 اعطای سریع وظیفه"),
         BotCommand("open", "🟢 آغاز ساعت کاری"),
         BotCommand("close", "🔴 پایان ساعت کاری"),
-        BotCommand("override_strike", "✏️ تغییر دستی اخطار مدیر"),
-        BotCommand("sheets", "📊 گوگل‌شیت — مرکز داده‌ی آفلاین"),
-        BotCommand("proactive", "💬 پیام‌دادنِ خودکار رهگشا"),
     ]
     admin_cmds = [
         BotCommand("start", "🏠 شروع — منوی اصلی"),
@@ -348,16 +339,6 @@ async def post_init(application: Application) -> None:
     # Persona: flush held Rahgosha messages outside users' delivery windows
     try:
         ai_persona.start(application)
-        import ai_proactive
-        ai_proactive.start(application)
-        import ai_outreach
-        ai_outreach.start(application)
-        import ops_group
-        ops_group.start(application)
-        import ai_manager
-        ai_manager.start(application)
-        import ai_guardian
-        ai_guardian.start(application)
     except Exception as e:
         logger.warning(f"Could not start persona flusher: {e}")
 
@@ -630,30 +611,6 @@ def build_application():
 
     # 🌐 روترِ چندسرور — اولین هندلرِ همه‌ی آپدیت‌ها (سرورِ جاریِ این آپدیت را تعیین می‌کند)
     app.add_handler(TypeHandler(Update, routing.route_update), group=-100)
-
-    # 💬 پیام‌دادنِ خودکارِ رهگشا (/proactive — فقط مدیر ارشد؛ دکمه‌های پیام‌ها برای همه)
-    try:
-        import ai_proactive
-        ai_proactive.register(app)
-        import ai_outreach
-        ai_outreach.register(app)
-        import ops_group
-        ops_group.register(app)
-        import ops_panel
-        ops_panel.register(app)
-        import ai_manager_panel
-        ai_manager_panel.register(app)
-        import ai_guardian
-        ai_guardian.register(app)
-    except Exception as _e:
-        logger.warning(f"ai_proactive register failed: {_e}")
-
-    # 📊 آینه‌ی دیتابیس در گوگل‌شیت (/sheets — فقط مدیر ارشد)
-    try:
-        import sheets_sync
-        sheets_sync.register(app)
-    except Exception as _e:
-        logger.warning(f"sheets_sync register failed: {_e}")
 
     # 🔎 ردیابیِ کاملِ اقدامات مدیران (گروه -5؛ قبل از هر چیز، بدونِ اثر روی پردازش)
     import audit as _audit

@@ -95,9 +95,8 @@ async def history_from_db(session_id: int, turns: int = HISTORY_TURNS) -> list:
             out[-1]["parts"][0]["text"] += "\n" + txt
         else:
             out.append({"role": role, "parts": [{"text": txt}]})
-    if out and out[0]["role"] != "user":
-        # گفتگو را خودِ رهگشا شروع کرده (پیامِ خودکار): برای Gemini یک نوبتِ کاربرِ ساختگی اول می‌گذاریم تا زمینه گم نشود
-        out.insert(0, {"role": "user", "parts": [{"text": "(گفتگو را رهگشا خودش شروع کرد)"}]})
+    while out and out[0]["role"] != "user":
+        out.pop(0)
     return out
 
 
