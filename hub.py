@@ -587,7 +587,7 @@ async def hub_static_files(request):
     if not os.path.isfile(path):
         raise web.HTTPNotFound()
     resp = web.FileResponse(path)
-    if "v" in request.query:
+    if "v" in request.query and not os.path.basename(path).startswith("rgm."):
         resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     else:
         resp.headers["Cache-Control"] = "no-cache, must-revalidate"
