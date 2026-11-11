@@ -295,6 +295,7 @@
       E.quick = nav;
     }
     /* کارتِ آب‌وهوا: یک نمونه برای همیشه (انیمیشن‌هایش هیچ‌وقت از نو شروع نمی‌شوند) */
+    if (isP && !E.rgm) { E.rgm = rgmEntry(); E.top.append(E.rgm); }
     if (!E.wx) { E.wx = weatherCard(); E.top.append(E.wx); }
 
     /* بخشِ داده: اگر چیزی عوض نشده، هیچ کاری نکن */
@@ -796,6 +797,42 @@
     s.onerror = function () { bfState = 0; toast('بارگذاری خلاصه ناموفق بود'); if (cur === 'brief') go('home'); };
     doc.head.append(s);
   }
+  /* ─── مرکزِ فرماندهیِ رهگشا (رهگشای مدیر + نگهبان؛ تنبل؛ فقط مدیر ارشد) ─── */
+  var rgmState = 0, rgmOpenView = null;
+  function loadRgm() {
+    if (rgmState) return;
+    rgmState = 1;
+    if (!doc.getElementById('rgm-css')) {
+      var l = doc.createElement('link'); l.id = 'rgm-css'; l.rel = 'stylesheet'; l.href = 'rgm.css?v=' + V; doc.head.append(l);
+    }
+    var s = doc.createElement('script');
+    s.src = 'rgm.js?v=' + V;
+    s.onload = function () {
+      rgmState = 2;
+      window.HubRgm.mount($('#tab-rgm'), { h: h, ic: ic, hx: hx, tg: tg, toast: toast, LS: LS, api: api, Sheet: Sheet, goHome: function () { go('home'); } });
+      if (rgmOpenView) { window.HubRgm.open(rgmOpenView); rgmOpenView = null; }
+      if (cur === 'rgm' && window.HubRgm.onShow) window.HubRgm.onShow();
+    };
+    s.onerror = function () { rgmState = 0; toast('بارگذاری مرکزِ فرماندهی ناموفق بود'); if (cur === 'rgm') go('home'); };
+    doc.head.append(s);
+  }
+  function rgmEntry() {
+    var st = h('span', { text: 'در حال بررسی…' });
+    var el = h('button', { type: 'button', class: 'rgm-entry', 'data-s': 'off', 'aria-label': 'مرکز فرماندهیِ رهگشا', onclick: function () { hx.tap(); go('rgm'); } },
+      h('span', { class: 'ei' }, ic('shield')), h('span', { class: 'em' }, h('b', { text: 'مرکزِ فرماندهیِ رهگشا' }), st), h('i', { class: 'ed' }));
+    if (!doc.getElementById('rgm-css')) {
+      var l = doc.createElement('link'); l.id = 'rgm-css'; l.rel = 'stylesheet'; l.href = 'rgm.css?v=' + V; doc.head.append(l);
+    }
+    function poll() {
+      if (doc.hidden || cur !== 'home') return;
+      api('/hub/api/rgm/mini').then(function (d) {
+        el.dataset.s = d.locked ? 'lock' : d.active ? 'on' : 'off';
+        st.textContent = d.locked ? '🔒 قفلِ اضطراری روشن است' : (d.active ? '🟢 رهگشا مدیر است' + (d.forever ? ' (تا اطلاعِ ثانوی)' : '') : '⚪️ رهگشای مدیر خاموش است') + (d.open ? ' • ' + d.open + ' رویدادِ باز' : ' • نگهبان بیدار است');
+      }).catch(function () { st.textContent = 'رهگشای مدیر و نگهبان'; });
+    }
+    poll(); setInterval(poll, 20000);
+    return el;
+  }
   function briefTile() {
     return h('button', { type: 'button', class: 'q-ai', 'aria-label': 'خلاصه‌ی امروز', onclick: function () { hx.tap(); go('brief'); } },
       h('span', { class: 'q-ic ai' },
@@ -1077,7 +1114,7 @@
   };
 
   /* ─── ناوبری ─────────────────────────────────────────────── */
-  var panels = { home: $('#tab-home'), players: $('#tab-players'), tours: $('#tab-tours'), manage: $('#tab-manage'), clock: $('#tab-clock'), weather: $('#tab-weather'), brief: $('#tab-brief'), me: $('#tab-me') };
+  var panels = { home: $('#tab-home'), players: $('#tab-players'), tours: $('#tab-tours'), manage: $('#tab-manage'), clock: $('#tab-clock'), weather: $('#tab-weather'), brief: $('#tab-brief'), rgm: $('#tab-rgm'), me: $('#tab-me') };
   var bar = $('#tabbar'), pill = $('#pill');
   /* حباب قرمزِ زیرِ تبِ فعال.
      قبلاً با getBoundingClientRect اندازه‌گیری می‌شد؛ آن مقدار «transform» را هم شامل می‌شود:
@@ -1121,7 +1158,7 @@
 
     /* ۱) همه‌ی خواندن‌ها، وقتی layout هنوز تمیز است (بدونِ reflowِ اجباری وسطِ نوشتن‌ها) */
     scrollPos[prev] = window.scrollY;
-    var barKey = (name === 'weather' || name === 'brief') ? 'home' : name;
+    var barKey = (name === 'weather' || name === 'brief' || name === 'rgm') ? 'home' : name;
     var tb = bar.querySelector('button[data-go="' + barKey + '"]');
     var pl = -1, pw = 0;
     if (tb && !tb.hidden && tb.offsetWidth) { pl = tb.offsetLeft; pw = tb.offsetWidth; }
@@ -1146,6 +1183,7 @@
       else if (name === 'clock') loadClock();
       else if (name === 'weather') loadWeather();
       else if (name === 'brief') loadBrief();
+      else if (name === 'rgm') loadRgm();
     } else if (name === 'players') { applyPlayers(); ensurePlayers(); }
     else if (name === 'manage' && M) M.renderTab();
     window.scrollTo(0, scrollPos[name] || 0);
@@ -1162,6 +1200,8 @@
     if (name === 'weather') { pushBack(function () { go('home'); }); if (window.HubWeather && window.HubWeather.onShow) window.HubWeather.onShow(); }
     if (prev === 'brief') { popBack(); if (window.HubBrief && window.HubBrief.onHide) window.HubBrief.onHide(); }
     if (name === 'brief') { pushBack(function () { go('home'); }); if (window.HubBrief && window.HubBrief.onShow) window.HubBrief.onShow(); }
+    if (prev === 'rgm') { popBack(); if (window.HubRgm && window.HubRgm.onHide) window.HubRgm.onHide(); }
+    if (name === 'rgm') { pushBack(function () { go('home'); }); if (window.HubRgm && window.HubRgm.onShow) window.HubRgm.onShow(); }
 
     /* ۳) کارهای غیرضروری (رنگِ هدرِ تلگرام، همگام‌سازیِ داده) بعد از اولین فریمِ تب، نه وسطِ آن */
     requestAnimationFrame(function () {
@@ -1212,7 +1252,8 @@
       manage: canAny('player_register', 'match_create', 'match_edit', 'match_delete', 'predictions', 'elo', 'comms', 'classes', 'teams',
                      'calendar', 'admins_manage', 'settings', 'pishva_panel'),
       clock: true, weather: true, me: true,
-      brief: !!(S.boot.me && S.boot.me.role === 'pishva')
+      brief: !!(S.boot.me && S.boot.me.role === 'pishva'),
+      rgm: !!(S.boot.me && S.boot.me.role === 'pishva')
     };
     var n = 0;
     bar.querySelectorAll('button[data-go]').forEach(function (b) {
@@ -1275,7 +1316,12 @@
     refresh(true).then(function () {
       try {
         var q = new URLSearchParams(location.search), sp0 = tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param;
-        if ((q.get('tab') === 'brief' || sp0 === 'brief') && S.boot && S.boot.me && S.boot.me.role === 'pishva') {
+        var isBoss = !!(S.boot && S.boot.me && S.boot.me.role === 'pishva'), tabq = q.get('tab') || sp0 || '';
+        if (isBoss && (tabq === 'rgm' || tabq === 'guard')) {
+          rgmOpenView = tabq === 'guard' ? 'guard' : (q.get('v') || null);
+          go('rgm');
+          if (history.replaceState) history.replaceState(null, '', location.pathname);
+        } else if ((q.get('tab') === 'brief' || sp0 === 'brief') && isBoss) {
           go('brief');
           if (history.replaceState) history.replaceState(null, '', location.pathname);
         }
