@@ -7,9 +7,10 @@
   var root, heroEl, navEl, bodyEl;
   var D = null, fetchedAt = 0, view = 'over', shown = false, pollT = 0, tickT = 0, loading = false;
   var F = { journal: 'all', capq: '', inc: 'open' }, JR = { items: [], more: true, busy: false }, PPL = null;
-  var NS = 'http://www.w3.org/2000/svg';
+  var NS = 'http://www.w3.org/2000/svg', BUILD = 'fx2';
 
   /* ─── ابزارها ─── */
+  var animIn = false, kIdx = 0, PT = { x: 180, y: 420 }, cntRaf = 0, rendered = false, heroSig = '', gidN = 0, H = {}, NAV = {};
   function fa(n) { return String(n == null ? '' : n).replace(/[0-9]/g, function (d) { return '۰۱۲۳۴۵۶۷۸۹'[+d]; }); }
   function div(cls, kids) { return h.apply(null, ['div', { class: cls }].concat(kids || [])); }
   function sp(t, cls) { return h('span', { class: cls || null, text: t }); }
@@ -21,33 +22,81 @@
   }
   function clock(s) { s = Math.max(0, Math.round(s)); var hh = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; function p(n) { return (n < 10 ? '0' : '') + n; } return fa(p(hh) + ':' + p(m) + ':' + p(x)); }
   function svg(tag, attrs) { var n = document.createElementNS(NS, tag); for (var k in attrs) n.setAttribute(k, attrs[k]); return n; }
-  function ring(pct, color, r, w) {
-    var C = 2 * Math.PI * r, s = svg('svg', { viewBox: '0 0 ' + (2 * (r + w)) + ' ' + (2 * (r + w)), class: 'ring' });
+  function clamp(p) { return Math.max(0, Math.min(100, p)); }
+  /* حلقه‌ی پیشرفت: با animate از صفر پر می‌شود؛ بعداً فقط strokeDashoffset عوض می‌شود (نرم، بدونِ ساختِ دوباره) */
+  function ring(pct, color, r, w, animate) {
+    var C = 2 * Math.PI * r, d = 2 * (r + w), s = svg('svg', { viewBox: '0 0 ' + d + ' ' + d, class: 'ring' });
     s.append(svg('circle', { cx: r + w, cy: r + w, r: r, fill: 'none', stroke: 'rgba(128,128,128,.25)', 'stroke-width': w }));
-    var a = svg('circle', { cx: r + w, cy: r + w, r: r, fill: 'none', stroke: color, 'stroke-width': w, 'stroke-linecap': 'round', 'stroke-dasharray': C, 'stroke-dashoffset': C * (1 - Math.max(0, Math.min(100, pct)) / 100) });
-    a.style.transition = 'stroke-dashoffset .8s ease'; s.append(a); return s;
+    var off = C * (1 - clamp(pct) / 100);
+    var a = svg('circle', { cx: r + w, cy: r + w, r: r, fill: 'none', stroke: color, 'stroke-width': w, 'stroke-linecap': 'round', 'stroke-dasharray': C });
+    a.style.strokeDashoffset = animate ? C : off;
+    a.style.transition = 'stroke-dashoffset 1.1s cubic-bezier(.2,.8,.2,1), stroke .5s';
+    if (animate) setTimeout(function () { a.style.strokeDashoffset = off; }, 60);
+    s.append(a); s.__arc = a; s.__C = C; return s;
   }
-  function spark(vals, color) {
+  function spark(vals, color, animate) {
     var v = (vals || []).filter(function (x) { return x != null; });
-    var s = svg('svg', { viewBox: '0 0 200 60', class: 'rgm-spark', preserveAspectRatio: 'none' });
+    var s = svg('svg', { viewBox: '0 0 320 62', class: 'rgm-spark', preserveAspectRatio: 'none' });
     if (v.length < 2) return s;
-    var mn = Math.min.apply(null, v), mx = Math.max.apply(null, v), rg = Math.max(1, mx - mn), pts = v.map(function (y, i) { return [i * 200 / (v.length - 1), 54 - (y - mn) / rg * 46]; });
-    var d = 'M' + pts.map(function (p) { return p[0].toFixed(1) + ' ' + p[1].toFixed(1); }).join(' L');
-    s.append(svg('path', { d: d + ' L200 60 L0 60Z', fill: color, opacity: '.14' }), svg('path', { d: d, fill: 'none', stroke: color, 'stroke-width': 2.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+    var gid = 'rgs' + (++gidN), df = svg('defs', {}), lg = svg('linearGradient', { id: gid, x1: 0, y1: 0, x2: 0, y2: 1 });
+    lg.append(svg('stop', { offset: '0', 'stop-color': color, 'stop-opacity': '.38' }), svg('stop', { offset: '1', 'stop-color': color, 'stop-opacity': '0' })); df.append(lg);
+    var mn = Math.min.apply(null, v), mx = Math.max.apply(null, v), rg = Math.max(1, mx - mn), pts = v.map(function (y, i) { return [i * 320 / (v.length - 1), 52 - (y - mn) / rg * 42]; });
+    var d = 'M' + pts.map(function (p) { return p[0].toFixed(1) + ' ' + p[1].toFixed(1); }).join(' L'), last = pts[pts.length - 1];
+    var line = svg('path', { d: d, pathLength: 1, fill: 'none', stroke: color, 'stroke-width': 2.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', class: animate ? 'ln draw' : 'ln' });
+    s.append(df, svg('path', { d: d + ' L320 62 L0 62Z', fill: 'url(#' + gid + ')', class: animate ? 'ar fadein' : 'ar' }), line,
+      svg('circle', { cx: last[0], cy: last[1], r: 7, fill: color, opacity: '.28', class: 'dotp' }), svg('circle', { cx: last[0], cy: last[1], r: 3.4, fill: '#fff' }));
     return s;
   }
   function btn(text, cls, fn, icon) { return h('button', { type: 'button', class: 'rgm-b ' + (cls || ''), onclick: function (e) { hx.tap(); fn(e); } }, icon ? ic(icon) : null, text); }
-  function sw(on, fn) { var b = h('button', { type: 'button', class: 'rgm-sw' + (on ? ' on' : ''), role: 'switch', 'aria-checked': on ? 'true' : 'false', onclick: function () { hx.sel(); fn(!on); } }); return b; }
+  function sw(on, fn) { return h('button', { type: 'button', class: 'rgm-sw' + (on ? ' on' : ''), role: 'switch', 'aria-checked': on ? 'true' : 'false', onclick: function () { hx.sel(); fn(!on); } }); }
   function seg(opts, val, fn) { return h('div', { class: 'rgm-seg' }, opts.map(function (o) { return h('button', { type: 'button', class: val === o[0] ? 'on' : '', onclick: function () { hx.sel(); fn(o[0]); } }, o[1]); })); }
-  function card(title, icon, kids, cls, extra) { return div('rgm-card rgm-fade ' + (cls || ''), [title ? h('h4', { class: 'rgm-h' }, icon ? ic(icon) : null, sp(title), h('i', { class: 'sp' }), extra || null) : null].concat(kids)); }
+  function card(title, icon, kids, cls, extra) { return div('rgm-card ' + (cls || ''), [title ? h('h4', { class: 'rgm-h' }, icon ? ic(icon) : null, sp(title), h('i', { class: 'sp' }), extra || null) : null].concat(kids)); }
   function li(title, sub, end) { return div('rgm-li', [div('m', [div('t', [title]), sub ? div('s', [sub]) : null]), end || null]); }
   function empty(t) { return div('rgm-empty', [t]); }
-  function kpi(label, val, tone, sub) { return h('div', { class: 'rgm-k ' + (tone || '') }, h('b', { text: val == null ? '—' : fa(val) }), sp(label), sub ? h('i', { text: sub }) : null); }
+  function kpi(label, val, tone, sub) {
+    var b = h('b', { text: val == null ? '—' : fa(animIn && typeof val === 'number' ? 0 : val) });
+    if (typeof val === 'number') b.dataset.n = val;
+    var n = h('div', { class: 'rgm-k ' + (tone || '') }, b, sp(label), sub ? h('i', { text: sub }) : null);
+    if (animIn) { n.classList.add('rgm-enter'); n.style.setProperty('--i', kIdx++); }
+    return n;
+  }
+  function runCount() {
+    cancelAnimationFrame(cntRaf);
+    var els = Array.prototype.slice.call(bodyEl.querySelectorAll('b[data-n]')), t0 = performance.now();
+    if (!els.length) return;
+    (function step(now) {
+      var k = Math.min(1, (now - t0) / 900), e = 1 - Math.pow(1 - k, 3);
+      els.forEach(function (el) { el.textContent = fa(Math.round(+el.dataset.n * e)); });
+      if (k < 1) cntRaf = requestAnimationFrame(step);
+    })(t0);
+  }
   function lvTag(l) { return h('span', { class: 'rgm-tag l' + l, text: ['', 'مشکوک', 'خصمانه', 'بحرانی'][l] || 'سطح ' + fa(l) }); }
-  function relT(s) { return s || ''; }
-
   function sheetOpen(o) { o.body = div('rgm-sh', [o.body]); Sheet.open(o); }
   function sheetSet(n) { Sheet.set(div('rgm-sh', [n])); }
+
+  /* موجِ ذرات هنگامِ موفقیت + موجِ لمس (ripple) */
+  var BURST = { mgr_grant: '#22c55e', gd_unlock: '#22c55e', gd_close: '#38bdf8', gd_release: '#a78bfa', mgr_full: '#f59e0b', gd_lock: '#ef4444', mgr_revoke: '#94a3b8', gd_contain: '#f97316', mgr_directive: '#38bdf8' };
+  function burst(x, y, color) {
+    if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    var box = h('div', { class: 'rgm-burst' });
+    for (var i = 0; i < 18; i++) {
+      var ang = Math.PI * 2 * i / 18 + Math.random() * .4, dist = 50 + Math.random() * 70, pt = h('i', { class: i % 3 ? 'c' : 'r' });
+      pt.style.cssText = 'left:' + x + 'px;top:' + y + 'px;--dx:' + Math.cos(ang) * dist + 'px;--dy:' + Math.sin(ang) * dist + 'px;--r:' + (Math.random() * 540 - 270) + 'deg;--c:' + color + ';animation-delay:' + (Math.random() * 60) + 'ms';
+      box.append(pt);
+    }
+    document.body.append(box); setTimeout(function () { box.remove(); }, 1000);
+  }
+  function ripple(el, e) {
+    var r = el.getBoundingClientRect(), d = Math.max(r.width, r.height) * 1.7, s = document.createElement('span');
+    s.className = 'rgm-rip'; s.style.cssText = 'width:' + d + 'px;height:' + d + 'px;left:' + (e.clientX - r.left - d / 2) + 'px;top:' + (e.clientY - r.top - d / 2) + 'px';
+    el.append(s); setTimeout(function () { s.remove(); }, 700);
+  }
+  function onPointer(e) {
+    if (!shown) return;
+    PT = { x: e.clientX, y: e.clientY };
+    var t = e.target && e.target.closest && e.target.closest('.rgm-b,.rgm-chip,.rgm-mc,.rgm-nav button,.rgm-sw,.rgm-seg button');
+    if (t) ripple(t, e);
+  }
 
   /* ─── شبکه ─── */
   function load(first) {
@@ -57,22 +106,25 @@
       if (!D) { bodyEl.replaceChildren(empty(e && e.code === 403 ? 'این بخش فقط برای مدیر ارشد است.' : 'اتصال برقرار نشد؛ دوباره امتحان کنید.')); }
     }).then(function () { loading = false; }, function () { loading = false; });
   }
-  var lastSig = '';
+  /* فیلدهایی که هر چند ثانیه عوض می‌شوند (شمارنده‌ی زمان و آمار) در امضا نیستند؛ وگرنه کلِ صفحه هر ۹ ثانیه از نو ساخته می‌شد (همان «سکته») */
+  var VOL = { now: 1, now_fa: 1, remaining: 1, elapsed: 1, pct_left: 1, usage: 1, last_round_fa: 1 }, lastSig = '';
   function setData(d) {
-    var sig = JSON.stringify(d, function (k, v) { return (k === 'now' || k === 'now_fa') ? undefined : v; });
+    var sig = JSON.stringify(d, function (k, v) { return VOL[k] ? undefined : v; });
     D = d; fetchedAt = Date.now();
-    renderHero();
-    if (sig === lastSig) return;
+    updateHero(); updateNav();
+    if (sig === lastSig) return;                         // چیزی تغییر نکرده → هیچ DOMی دست نمی‌خورد
     lastSig = sig;
     var ae = document.activeElement;
-    if (ae && root.contains(ae) && /^(INPUT|TEXTAREA)$/.test(ae.tagName)) { renderNav(); return; }   // وسطِ تایپ، صفحه را از نو نساز
-    renderNav(); renderBody();
+    if (ae && root.contains(ae) && /^(INPUT|TEXTAREA)$/.test(ae.tagName)) return;   // وسطِ تایپ، صفحه را از نو نساز
+    renderBody(!rendered); rendered = true;
   }
   function act(body, quiet) {
+    var px = PT.x, py = PT.y;
     return api('/hub/api/rgm/act', body).then(function (r) {
       if (r && r.overview) setData(r.overview);
       if (!quiet) toast(r && r.message ? String(r.message).split('\n')[0].slice(0, 90) : (r && r.ok ? 'انجام شد' : 'انجام نشد'));
       (r && r.ok ? hx.ok : hx.err)();
+      if (r && r.ok && BURST[body.a]) burst(px, py, BURST[body.a]);
       return r;
     }).catch(function (e) { hx.err(); toast(e && e.data && e.data.message ? e.data.message : 'خطا؛ دوباره امتحان کنید.'); return null; });
   }
@@ -81,59 +133,100 @@
     sheetOpen({ title: title, body: div('', [h('p', { class: 'rgm-sub', style: 'font-size:14px;margin:6px 0 14px', text: text })]), foot: b });
   }
 
-  /* ─── هیرو ─── */
+  /* ─── هیرو: یک‌بار ساخته می‌شود و فقط مقدارهایش به‌روز می‌شود (بدونِ پرش و بدونِ ری‌استارتِ انیمیشن‌ها) ─── */
   function state() { return !D ? 'off' : D.guard.locked ? 'lock' : D.mgr.active ? 'on' : 'off'; }
   function remainNow() { if (!D || !D.mgr.timer.active || !D.mgr.timer.timed) return null; return Math.max(0, D.mgr.timer.remaining - (Date.now() - fetchedAt) / 1000); }
-  function renderHero() {
-    if (!D) return;
+  function modeFa(m) { return { off: 'خاموش', watch: 'هشدار', protect: 'هشدار+مهار', full: 'کامل' }[m] || m; }
+  function buildHero() {
+    var pts = [];
+    for (var i = 0; i < 12; i++) pts.push(h('i', { class: 'pt', style: '--x:' + (5 + i * 8) + '%;--d:' + (5 + (i * 7) % 6) + 's;--dl:-' + ((i * 13) % 9) + 's' }));
+    var fx = div('rgm-fx', [div('bl b1'), div('bl b2'), div('grid'), div('scan'), div('haz')].concat(pts));
+    H.ring = ring(0, '#64748b', 34, 5, false); H.core = div('core', []);
+    var orb = div('rgm-orb', [div('rp'), div('rp r2'), div('sweep'), div('orbit', [h('i')]), div('orbit o2', [h('i')]), H.ring, H.core]);
+    H.title = h('h3'); H.clk = h('span', { class: 'rgm-time' }); H.desc = h('p');
+    var ecg = svg('svg', { viewBox: '0 0 300 30', class: 'rgm-ecg', preserveAspectRatio: 'none' }), dd = 'M0 15 H70 L78 15 L86 4 L96 26 L104 15 H168 L176 15 L182 9 L188 21 L194 15 H300';
+    ecg.append(svg('path', { d: dd, class: 'base' }), svg('path', { d: dd, class: 'pulse', pathLength: 450 }));
+    H.pills = div('rgm-pills'); H.btns = div('rgm-hbtns');
+    heroEl.replaceChildren(fx, div('rgm-hrow', [orb, div('rgm-ht', [H.title, H.clk, H.desc])]), ecg, H.pills, H.btns);
+  }
+  function updateHero() {
+    if (!D || !H.title) return;
     var s = state(), t = D.mgr.timer, g = D.guard, rem = remainNow();
     heroEl.dataset.s = s;
-    var pct = t.active ? (t.timed ? (rem / t.total) * 100 : 100) : 0;
-    var col = s === 'lock' ? '#ef4444' : '#22c55e';
-    var orb = div('rgm-orb', [ring(pct, s === 'off' ? '#64748b' : col, 34, 5), div('core', [ic(s === 'lock' ? 'lock' : s === 'on' ? 'bolt' : 'power')])]);
-    var title = s === 'lock' ? 'قفلِ اضطراری روشن است' : s === 'on' ? 'رهگشا مدیر است' : 'رهگشای مدیر خاموش است';
-    var sub = s === 'off' ? 'مدیریت دست خودتان است. هر لحظه بسپارید.' : t.timed ? 'مدیریت تا پایانِ مهلت با رهگشاست.' : 'تا اطلاعِ ثانوی مدیریت با رهگشاست.';
-    var ht = div('rgm-ht', [h('h3', { text: title }), t.active && t.timed ? h('span', { class: 'rgm-time', id: 'rgm-clk', text: clock(rem) }) : null, h('p', { text: s === 'lock' ? (g.lock_reason || 'نگهبان قفل کرد.') : sub })]);
-    var pills = div('rgm-pills', [
-      sp('🛡️ نگهبان: ' + modeFa(g.eff_mode), 'rgm-pill ' + (g.eff_mode === 'off' ? '' : 'g')),
-      D.mgr.full_access ? sp('👑 دسترسیِ کامل', 'rgm-pill y') : sp('🔐 ' + fa(D.mgr.caps_on) + ' از ' + fa(D.mgr.caps_all) + ' حوزه', 'rgm-pill'),
-      D.kpi.incidents_open ? sp('🚨 ' + fa(D.kpi.incidents_open) + ' رویدادِ باز', 'rgm-pill r') : sp('✅ بدونِ رویدادِ باز', 'rgm-pill g'),
-      D.mgr.active ? sp('🧠 دورِ بعد: ' + (D.mgr.next_round_fa || '—').split(' ').slice(-1)[0], 'rgm-pill') : null]);
-    var bs = D.mgr.active
-      ? div('rgm-hbtns', [btn('دور همین الان', 'gl', function () { act({ a: 'mgr_round' }); }, 'brain'), btn('تمدید', 'gl', extendSheet, 'clock'), btn('خاموشیِ فوری', 'd', function () { confirmSheet('خاموشیِ فوریِ رهگشای مدیر', 'مدیریت همین لحظه به شما برمی‌گردد و گزارشِ این دوره در پیوی می‌آید.', 'بله، خاموش کن', true, function () { act({ a: 'mgr_revoke' }); }); }, 'power')])
-      : div('rgm-hbtns', [btn('بسپار به رهگشا', 'ok', grantSheet, 'bolt')]);
-    heroEl.replaceChildren(div('rgm-hrow', [orb, ht]), pills, bs);
+    var pct = t.active ? (t.timed ? rem / t.total * 100 : 100) : 0, col = s === 'lock' ? '#ef4444' : s === 'on' ? '#22c55e' : '#64748b';
+    var arc = H.ring.__arc; arc.style.strokeDashoffset = H.ring.__C * (1 - clamp(pct) / 100); arc.setAttribute('stroke', col);
+    H.title.textContent = s === 'lock' ? 'قفلِ اضطراری روشن است' : s === 'on' ? 'رهگشا مدیر است' : 'رهگشای مدیر خاموش است';
+    H.desc.textContent = s === 'lock' ? (g.lock_reason || 'نگهبان قفل کرد.') : s === 'off' ? 'مدیریت دست خودتان است. هر لحظه بسپارید.' : t.timed ? 'مدیریت تا پایانِ مهلت با رهگشاست.' : 'تا اطلاعِ ثانوی مدیریت با رهگشاست.';
+    H.clk.style.display = t.active ? '' : 'none';
+    var sig = [s, t.active, t.timed, D.mgr.full_access, D.mgr.caps_on, D.mgr.caps_all, D.kpi.incidents_open, g.eff_mode, D.mgr.next_round_fa].join('|');
+    if (sig !== heroSig) {
+      heroSig = sig;
+      H.core.replaceChildren(ic(s === 'lock' ? 'lock' : s === 'on' ? 'bolt' : 'power'));
+      H.pills.replaceChildren(
+        sp('🛡️ نگهبان: ' + modeFa(g.eff_mode), 'rgm-pill ' + (g.eff_mode === 'off' ? '' : 'g')),
+        D.mgr.full_access ? sp('👑 دسترسیِ کامل', 'rgm-pill y') : sp('🔐 ' + fa(D.mgr.caps_on) + ' از ' + fa(D.mgr.caps_all) + ' حوزه', 'rgm-pill'),
+        D.kpi.incidents_open ? sp('🚨 ' + fa(D.kpi.incidents_open) + ' رویدادِ باز', 'rgm-pill r') : sp('✅ بدونِ رویدادِ باز', 'rgm-pill g'),
+        D.mgr.active ? sp('🧠 دورِ بعد: ' + (D.mgr.next_round_fa || '—').split(' ').slice(-1)[0], 'rgm-pill') : null);
+    }
+    var bk = s + (D.mgr.active ? 1 : 0);
+    if (bk !== H.bk) {
+      H.bk = bk;
+      H.btns.replaceChildren.apply(H.btns, D.mgr.active
+        ? [btn('دور همین الان', 'gl', function () { act({ a: 'mgr_round' }); }, 'brain'), btn('تمدید', 'gl', extendSheet, 'clock'),
+           btn('خاموشیِ فوری', 'd', function () { confirmSheet('خاموشیِ فوریِ رهگشای مدیر', 'مدیریت همین لحظه به شما برمی‌گردد و گزارشِ این دوره در پیوی می‌آید.', 'بله، خاموش کن', true, function () { act({ a: 'mgr_revoke' }); }); }, 'power')]
+        : [btn('بسپار به رهگشا', 'ok', grantSheet, 'bolt')]);
+    }
+    tick();
   }
-  function modeFa(m) { return { off: 'خاموش', watch: 'هشدار', protect: 'هشدار+مهار', full: 'کامل' }[m] || m; }
+  function tick() {
+    if (!D || !H.clk) return;
+    var t = D.mgr.timer, rem = remainNow();
+    if (!t.active) return;
+    H.clk.textContent = clock(rem != null ? rem : t.elapsed + (Date.now() - fetchedAt) / 1000);
+  }
 
-  /* ─── ناوبری ─── */
+  /* ─── ناوبری: یک‌بار ساخته می‌شود؛ نشانگرِ لغزنده با spring ─── */
   var TABS = [['over', 'نمای کلی', 'pulse'], ['caps', 'اختیارات', 'sliders'], ['guard', 'نگهبان', 'shield'], ['jr', 'ژورنال', 'book'], ['set', 'تنظیمات', 'gear']];
-  function renderNav() {
-    navEl.replaceChildren.apply(navEl, TABS.map(function (t) {
-      var b = h('button', { type: 'button', class: view === t[0] ? 'on' : '', onclick: function () { if (view !== t[0]) { hx.sel(); view = t[0]; renderNav(); renderBody(); window.scrollTo(0, 0); } } }, ic(t[2]), t[1]);
-      if (D && t[0] === 'guard' && D.kpi.incidents_open) b.append(sp(fa(D.kpi.incidents_open), 'rgm-tag l3'));
-      return b;
-    }));
+  function buildNav() {
+    NAV.ind = div('ind'); NAV.btns = {}; NAV.badge = sp('', 'rgm-tag l3'); navEl.replaceChildren(NAV.ind);
+    TABS.forEach(function (t) {
+      var b = h('button', { type: 'button', onclick: function () { if (view !== t[0]) { hx.sel(); view = t[0]; updateNav(); renderBody(true); window.scrollTo(0, 0); } } }, ic(t[2]), t[1]);
+      NAV.btns[t[0]] = b; navEl.append(b);
+    });
+    NAV.btns.guard.append(NAV.badge);
   }
-  function renderBody() {
+  function updateNav() {
+    if (!NAV.ind) return;
+    TABS.forEach(function (t) { NAV.btns[t[0]].classList.toggle('on', view === t[0]); });
+    var n = D ? D.kpi.incidents_open : 0; NAV.badge.textContent = fa(n); NAV.badge.style.display = n ? '' : 'none';
+    var b = NAV.btns[view];
+    if (b && b.offsetWidth) { NAV.ind.style.width = b.offsetWidth + 'px'; NAV.ind.style.transform = 'translateX(' + b.offsetLeft + 'px)'; }
+  }
+  function renderBody(animate) {
     if (!D) { bodyEl.replaceChildren(div('rgm-load', ['در حال بارگذاری…'])); return; }
-    var fn = { over: bodyOver, caps: bodyCaps, guard: bodyGuard, jr: bodyJournal, set: bodySet }[view];
+    var y = window.scrollY, fn = { over: bodyOver, caps: bodyCaps, guard: bodyGuard, jr: bodyJournal, set: bodySet }[view];
+    animIn = !!animate; kIdx = 0;
     bodyEl.replaceChildren.apply(bodyEl, fn());
+    if (animIn) {
+      Array.prototype.forEach.call(bodyEl.children, function (c, i) { if (!c.classList.contains('rgm-grid')) { c.classList.add('rgm-enter'); c.style.setProperty('--i', Math.min(i, 9)); } });
+      runCount();
+    } else window.scrollTo(0, y);                          // بازسازیِ بی‌صدا: جای اسکرول حفظ می‌شود
+    animIn = false;
   }
 
   /* ─── ۱) نمای کلی ─── */
   function bodyOver() {
     var k = D.kpi, sc = k.score == null ? 0 : k.score, col = sc >= 80 ? '#2fb344' : sc >= 55 ? '#f08c00' : '#e5484d';
-    var gauge = h('div', { class: 'rgm-k wide ' + (sc >= 80 ? 'ok' : sc >= 55 ? 'warn' : 'bad') }, div('rgm-gauge', [ring(sc, col, 34, 7), h('b', { text: fa(sc) })]),
+    var gauge = h('div', { class: 'rgm-k wide ' + (sc >= 80 ? 'ok' : sc >= 55 ? 'warn' : 'bad') }, div('rgm-gauge', [ring(sc, col, 34, 7, animIn), h('b', { text: fa(sc) })]),
       div('', [h('b', { style: 'font-size:16px', text: 'امتیازِ امنیتِ سیستم' }), h('i', { text: sc >= 80 ? 'وضعیت عالی است.' : sc >= 55 ? 'چند نکته نیاز به توجه دارد.' : 'وضعیت نگران‌کننده است؛ نگهبان را بررسی کنید.' }), h('i', { text: 'وضعیتِ سیستم: ' + ({ normal: 'عادی', bad: 'احتیاطی', danger: 'خطر', aps: 'APS' }[k.system_status] || k.system_status) })]));
-    var grid = div('rgm-grid rgm-fade', [gauge,
+    var grid = div('rgm-grid', [gauge,
       kpi('رویدادِ باز', k.incidents_open, k.incidents_open ? 'bad' : 'ok', fa(k.incidents_24h) + ' در ۲۴ ساعت'), kpi('فردِ مهارشده', k.incidents_contained, k.incidents_contained ? 'warn' : 'ok'),
       kpi('دورِ ۲۴ ساعت', k.rounds_24h, 'cy', fa(k.rounds_ok_24h) + ' موفق'), kpi('ژورنال', k.journal_total, 'vi'),
       kpi('غریبه‌ها', k.strangers, k.strangers ? 'warn' : 'ok'), kpi('در انتظارِ تأیید', k.pending, k.pending ? 'warn' : 'ok'),
       kpi('مدیرِ آنلاین', k.online, 'cy', 'از ' + fa(k.admins) + ' مدیر'), kpi('اقدامِ مخرب', k.destructive, k.destructive > 3 ? 'bad' : 'ok'),
       kpi('بازیکنِ دارای اخطار', k.warned, 'warn'), kpi('مسابقه بدونِ نتیجه', k.matches_pending, k.matches_pending ? 'warn' : 'ok')]);
     var tr = D.trend.map(function (x) { return x.score; });
-    var trend = card('روندِ امتیازِ امنیت', 'pulse', [tr.filter(function (x) { return x != null; }).length > 1 ? spark(tr, col) : empty('هنوز داده‌ی کافی برای نمودار نیست.')]);
+    var trend = card('روندِ امتیازِ امنیت', 'pulse', [tr.filter(function (x) { return x != null; }).length > 1 ? spark(tr, col, animIn) : empty('هنوز داده‌ی کافی برای نمودار نیست.')]);
     var quick = card('اقدام‌های سریع', 'bolt', [div('rgm-row', [
       btn('بکاپِ فوری', '', function () { act({ a: 'gd_backup' }); }, 'inbox'),
       D.guard.locked ? btn('رفعِ قفل', 'ok', function () { act({ a: 'gd_unlock' }); }, 'unlock') : btn('قفلِ اضطراری', 'd', lockSheet, 'lock')]),
@@ -142,7 +235,8 @@
     D.incidents.slice(0, 5).forEach(function (i) { evs.push({ t: i.ts, c: ['', '#f08c00', '#ff7a1a', '#e5484d'][i.level], a: '🛡️ ' + i.title, b: i.actor_name + ' — ' + i.ts_fa }); });
     D.journal.slice(0, 6).forEach(function (j) { evs.push({ t: j.ts, c: j.ok ? '#38bdf8' : '#e5484d', a: '🧠 ' + j.title, b: j.ts_fa }); });
     evs.sort(function (a, b) { return a.t < b.t ? 1 : -1; });
-    var tl = card('رویدادهای زنده', 'clock', evs.length ? [div('rgm-tl', evs.slice(0, 9).map(function (e) { var n = div('rgm-ev', [div('a', [e.a]), div('b', [e.b])]); n.style.setProperty('--c', e.c || 'var(--hint)'); return n; }))] : [empty('هنوز رویدادی ثبت نشده.')]);
+    if (evs[0]) evs[0].live = true;
+    var tl = card('رویدادهای زنده', 'clock', evs.length ? [div('rgm-tl', evs.slice(0, 9).map(function (e) { var n = div('rgm-ev' + (e.live ? ' live' : ''), [div('a', [e.a]), div('b', [e.b])]); n.style.setProperty('--c', e.c || 'var(--hint)'); return n; }))] : [empty('هنوز رویدادی ثبت نشده.')]);
     var risk = D.risk.length ? card('ریسکِ لحظه‌ایِ مدیران', 'alert', D.risk.map(function (r) { return li(r.replace(/^- /, ''), null); })) : null;
     return [grid, trend, quick, risk, tl].filter(Boolean);
   }
@@ -179,7 +273,7 @@
   var MODES = [['watch', 'فقط هشدار', 'eye', 'تهدید را می‌بیند و فوراً به شما خبر می‌دهد؛ خودش کاری نمی‌کند.'], ['protect', 'هشدار + مهار', 'shield', 'فردِ خصمانه را همان لحظه مهار می‌کند: قطعِ رهگشا، غیرفعال‌کردنِ مدیر، بلاکِ غریبه.'], ['full', 'کامل', 'lock', 'مهار + قفلِ اضطراری (APS و خاموشیِ ربات برای مدیران) هنگامِ تهدیدِ بحرانی + یک دورِ بررسیِ رهگشا.']];
   function bodyGuard() {
     var g = D.guard, out = [];
-    out.push(div('rgm-card glass rgm-lock rgm-fade' + (g.locked ? ' on danger' : ''), [div('big', [ic(g.locked ? 'lock' : 'unlock')]), h('h4', { text: g.locked ? 'قفلِ اضطراری روشن است' : 'سیستم آزاد است' }),
+    out.push(div('rgm-card glass rgm-lock' + (g.locked ? ' on danger' : ''), [div('big', [div('rp'), div('rp r2'), ic(g.locked ? 'lock' : 'unlock')]), h('h4', { text: g.locked ? 'قفلِ اضطراری روشن است' : 'سیستم آزاد است' }),
       h('p', { text: g.locked ? (g.lock_reason + ' — از ' + g.lock_since_fa + ' توسطِ ' + ({ guardian: 'نگهبان', boss: 'شما', rahgosha: 'رهگشا' }[g.lock_by] || g.lock_by)) : 'قفلِ اضطراری: وضعیتِ APS + خاموشیِ ربات و ورودِ مدیران. مدیر ارشد همیشه آزاد است.' }),
       g.locked ? btn('رفعِ قفل و برگشت به حالتِ قبل', 'ok full', function () { act({ a: 'gd_unlock' }); }, 'unlock') : btn('قفلِ اضطراریِ دستی', 'd full', lockSheet, 'lock')]));
     out.push(card('حالتِ نگهبان', 'shield', [div('rgm-mode', MODES.map(function (m) { return h('button', { type: 'button', class: 'rgm-mc' + (g.mode === m[0] ? ' on' : ''), onclick: function () { hx.sel(); act({ a: 'gd_config', mode: m[0] }, true); } }, ic(m[2]), div('', [h('b', { text: m[1] }), h('span', { text: m[3] })])); })),
@@ -226,7 +320,7 @@
       else { btns.push(btn('مهار', 'sm d', function () { act({ a: 'gd_contain', uid: i.actor_id, incident: i.id, reason: i.title }); }, 'shield'), btn('بلاکِ دائم', 'sm', function () { confirmSheet('بلاکِ دائم', 'این فرد بلاک می‌شود و دیگر دسترسی نخواهد داشت.', 'بلاک', true, function () { act({ a: 'gd_contain', uid: i.actor_id, incident: i.id, block: true, reason: i.title }); }); }, 'close')); }
       btns.push(btn('مشکلی نیست', 'sm', function () { act({ a: 'gd_close', id: i.id }); }, 'shield'));
     }
-    return div('rgm-inc', [div('top', [lvTag(i.level), h('span', { class: 'nm', text: i.actor_name }), sp(i.status === 'closed' ? 'بسته' : cont ? 'مهارشده' : 'باز', 'rgm-tag' + (i.status === 'closed' ? ' ok' : '')), h('i', { style: 'flex:1' }), sp(i.ts_fa, 'rgm-tag')]),
+    return div('rgm-inc lv' + i.level + (i.status === 'closed' ? ' closed' : ''), [div('top', [lvTag(i.level), h('span', { class: 'nm', text: i.actor_name }), sp(i.status === 'closed' ? 'بسته' : cont ? 'مهارشده' : 'باز', 'rgm-tag' + (i.status === 'closed' ? ' ok' : '')), h('i', { style: 'flex:1' }), sp(i.ts_fa, 'rgm-tag')]),
       div('dt', ['#' + fa(i.id) + ' — ' + i.title + (i.detail ? ' — ' + i.detail : '')]), (i.actions || []).length ? div('ac', ['⚙️ ' + i.actions.join(' • ')]) : null, btns.length ? div('btns', btns) : null]);
   }
   function peopleCard() {
@@ -342,16 +436,21 @@
   }
 
   /* ─── چرخه‌ی زندگی ─── */
-  function tick() { var e = document.getElementById('rgm-clk'); var r = remainNow(); if (e && r != null) e.textContent = clock(r); }
-  function onShow() { shown = true; load(!D); clearInterval(pollT); clearInterval(tickT); pollT = setInterval(function () { if (!document.hidden) load(false); }, 9000); tickT = setInterval(tick, 1000); }
+  function onShow() {
+    shown = true; load(!D); clearInterval(pollT); clearInterval(tickT);
+    pollT = setInterval(function () { if (!document.hidden) load(false); }, 9000); tickT = setInterval(tick, 1000);
+    requestAnimationFrame(function () { updateNav(); });
+  }
   function onHide() { shown = false; clearInterval(pollT); clearInterval(tickT); }
-  function open(v) { if (v && TABS.some(function (t) { return t[0] === v; })) { view = v; if (D) { renderNav(); renderBody(); } } }
+  function open(v) { if (v && TABS.some(function (t) { return t[0] === v; })) { view = v; updateNav(); if (D) renderBody(true); } }
   function mount(el, ctx) {
     h = ctx.h; ic = ctx.ic; hx = ctx.hx; tg = ctx.tg; toast = ctx.toast; LS = ctx.LS; api = ctx.api; Sheet = ctx.Sheet; goHome = ctx.goHome;
     root = el; el.replaceChildren();
     heroEl = h('header', { class: 'rgm-hero', 'data-s': 'off' }); navEl = h('nav', { class: 'rgm-nav', 'aria-label': 'بخش‌های مرکز فرماندهی' }); bodyEl = h('div', { class: 'rgm-body' });
-    el.append(div('rgm-top', [h('button', { type: 'button', class: 'rgm-x', 'aria-label': 'بازگشت', onclick: function () { hx.tap(); goHome(); } }, ic('chev')), h('h2', { text: 'مرکزِ فرماندهیِ رهگشا' })]), heroEl, navEl, bodyEl);
-    heroEl.append(div('rgm-load', ['…'])); renderNav(); renderBody();
+    el.append(div('rgm-top', [h('button', { type: 'button', class: 'rgm-x', 'aria-label': 'بازگشت', onclick: function () { hx.tap(); goHome(); } }, ic('chev')), h('h2', { text: 'مرکزِ فرماندهیِ رهگشا' }), h('small', { class: 'rgm-ver', text: 'v' + BUILD })]), heroEl, navEl, bodyEl);
+    buildHero(); buildNav(); updateNav(); renderBody(true);
+    document.addEventListener('pointerdown', onPointer, true);
+    window.addEventListener('resize', function () { updateNav(); });
     document.addEventListener('visibilitychange', function () { if (shown && !document.hidden) load(false); });
   }
   window.HubRgm = { mount: mount, onShow: onShow, onHide: onHide, open: open };
