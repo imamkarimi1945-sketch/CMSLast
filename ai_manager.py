@@ -23,6 +23,7 @@ import turso_db
 import database as db
 import srvctx
 import mgr_ctx
+import ai_workqueue as wq
 from config import DB_PATH, PISHVA_ID, ROLE_PISHVA
 from ops_group import bar, fa, h, jfmt, now_teh, spark
 
@@ -46,7 +47,7 @@ HARD_DENY = frozenset({
     "toggle_ai_online", "open_panel",
     "mgr_status", "mgr_grant", "mgr_extend", "mgr_revoke", "mgr_full_access", "mgr_preset", "mgr_capability_set", "mgr_directive",
     "mgr_announce_config", "mgr_announce_send", "mgr_journal", "mgr_round_now", "mgr_schedule", "mgr_memory", "mgr_report",
-    "unlock_system", "guard_config", "release_actor",            # نگهبان: رفعِ قفل/تنظیم/بازگردانی فقط با مدیر ارشد
+    "unlock_system", "guard_config", "release_actor", "mgr_initiative",            # نگهبان: رفعِ قفل/تنظیم/بازگردانی فقط با مدیر ارشد
 })
 DESTRUCTIVE = frozenset({"kick_player", "delete_match", "block_user", "delete_team", "set_admin_active", "set_admin_permissions",
                          "clear_admin_warnings", "edit_match_result", "add_admin", "set_admin_role", "toggle_admin_ai_access",
@@ -145,7 +146,7 @@ DEFAULT_STATE = {
     "announce": {"on": False, "admins": "all", "ids": [], "ops_group": True, "ann_group": False},
     "report": {"boss_pm": True, "ops_group": False},
     "interval_min": 120, "sched_v": 2, "daily_time": "22:00", "next_round": None, "last_round": None, "last_daily": "",
-    "grant_count": 0, "fail_streak": 0, "warned": [],
+    "grant_count": 0, "fail_streak": 0, "warned": [], "initiative": "active",
 }
 _cache = {"t": 0.0, "v": None}
 
@@ -752,7 +753,7 @@ READ_PLAN = (
 )
 
 
-def _round_prompt(st, trigger, note, snap, trend, journal_tail, memory, allowed):
+def _round_prompt(st, trigger, note, snap, trend, journal_tail, memory, allowed, queue_block=""):
     caps = eff_caps(st)
     on_labels = [d["label"] for d in capability_defs() if caps[d["key"]]]
     kind_hint = {
@@ -779,7 +780,7 @@ def _round_prompt(st, trigger, note, snap, trend, journal_tail, memory, allowed)
         f"🧠 یادداشت‌های قبلیِ خودت:\n{memory or '—'}\n\n📓 آخرین دورها:\n{journal_tail or '—'}\n\n"
         f"🔐 حوزه‌های مجاز: {'؛ '.join(on_labels) or '—'}\n"
         f"ابزارهای در دسترس: {', '.join(sorted(allowed)) or 'هیچ'} + mgr_note + mgr_ask_boss\n\n"
-        + read_block +
+        + read_block + (queue_block + "\n\n" if queue_block else "") +
         "سیاستِ اقدام (متناسب با ریسک):\n"
         "🟢 سبز — بدونِ پرسش و فوری: کارهای روتینِ مدیریت که دستور یا شواهدِ روشن می‌خواهد (ثبتِ اخطارِ مستندِ بازیکن، یادآوری، پیگیریِ مسابقه‌ی بدونِ نتیجه، صفِ روتین، پیام/وظیفه به مدیرها).\n"
         "🟡 زرد — با ثبتِ دلیلِ مستند: اخطار به مدیر، قطعِ دسترسیِ هوش‌مصنوعیِ یک مدیر، رد کردنِ درخواستِ دسترسیِ مشکوک، حذف/ویرایشِ داده‌ای که شواهدش روشن است. "
@@ -818,6 +819,8 @@ async def run_round(bot, trigger="periodic", note="") -> str:
         t0 = now_teh()
         try:
             snap, metrics = await _snapshot()
+            queue = await wq.build()
+            metrics["queue_n"] = len(queue)
             await _exec("INSERT INTO mgr_metrics(ts, data) VALUES (?,?)", (_iso(t0), json.dumps(metrics)))
             await _exec("DELETE FROM mgr_metrics WHERE id < (SELECT MAX(id) FROM mgr_metrics) - 500")
             trend = await _trend_text() if eff_caps(st).get("trend_analysis") else "(مطالعه‌ی روند برایت خاموش است)"
@@ -828,17 +831,25 @@ async def run_round(bot, trigger="periodic", note="") -> str:
             allowed = allowed_tools(st)
             decls = [d for d in ai_tools.TOOL_DECLARATIONS if d["name"] in allowed] + (AGENT_TOOLS)
             tools = [{"function_declarations": decls}]
-            contents = [{"role": "user", "parts": [{"text": _round_prompt(st, trigger, note, snap, trend, jt, mem, allowed)}]},
+            contents = [{"role": "user", "parts": [{"text": _round_prompt(st, trigger, note, snap, trend, jt, mem, allowed, wq.prompt_block(queue, st.get("initiative", "active")))}]},
                         {"role": "model", "parts": [{"text": "باشه؛ دورِ مدیریتی را شروع می‌کنم."}]},
                         {"role": "user", "parts": [{"text": "شروع کن."}]}]
             ctx = _MgrCtx(bot)
             mw, md, mh = limits(st)
-            counters, executed, final = {"writes": 0, "destr": 0, "max_w": mw, "max_d": md}, [], ""
+            counters, executed, final, nudged = {"writes": 0, "destr": 0, "max_w": mw, "max_d": md}, [], "", False
             read_names = [d["name"] for d in decls if d["name"].startswith(READ_PREFIX)][:60]
             force_hops = FORCE_READ_HOPS + (1 if trigger == "incident" else 0)
             for hop in range(mh):
                 tc = ({"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": read_names}}
                       if read_names and hop < force_hops else None)
+                if (queue and not nudged and st.get("initiative", "active") != "report" and hop >= force_hops and counters["writes"] == 0 and hop < mh - 2):
+                    nudged = True       # صف پر است ولی هنوز هیچ اقدامی نشده → یک قدمِ اجباری برای «اقدام» (نه فقط خواندن)
+                    names = {d["name"] for d in decls}
+                    act_names = sorted(n for n in ({x for q in queue for x in q["tools"]} | {"message_admin", "assign_task", "set_reminder", "mgr_note", "mgr_ask_boss"})
+                                       if n in names and not n.startswith(READ_PREFIX))
+                    if act_names:
+                        contents[-1]["parts"].append({"text": "یادآوری: صفِ کار هنوز بدونِ اقدام است. حالا برای مواردِ صف ابزارِ مناسب را صدا بزن (یا mgr_note/mgr_ask_boss همراه دلیل)."})
+                        tc = {"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": act_names}}
                 data = await aia._call_gemini(contents, tools, tc)
                 parts = aia._extract_parts(data)
                 if not parts:
@@ -852,6 +863,10 @@ async def run_round(bot, trigger="periodic", note="") -> str:
                     continue
                 final = "".join(p.get("text", "") for p in parts).strip()
                 break
+            try:
+                await wq.mark_offered(queue)
+            except Exception:
+                logger.info("workqueue mark failed", exc_info=True)
             if not final:
                 final = "⚠️ این دور بدونِ گزارشِ نهایی تمام شد." + (" کارهای انجام‌شده در ژورنال است." if executed else "")
         except Exception as e:
@@ -958,10 +973,10 @@ def start(application):
 # ═══════════════════════ ابزارهای چتِ رهگشا (فقط مدیر ارشد) ═══════════════════════
 TOOL_PERMISSIONS = {n: BOSS for n in (
     "mgr_status", "mgr_grant", "mgr_extend", "mgr_revoke", "mgr_full_access", "mgr_preset", "mgr_capability_set",
-    "mgr_directive", "mgr_announce_config", "mgr_announce_send", "mgr_journal", "mgr_round_now", "mgr_schedule", "mgr_memory", "mgr_report")}
+    "mgr_directive", "mgr_announce_config", "mgr_announce_send", "mgr_journal", "mgr_round_now", "mgr_schedule", "mgr_memory", "mgr_report", "mgr_initiative")}
 CATEGORY = ("manager", "🤖 رهگشای مدیر (سپردنِ مدیریت، اختیارات، اعلام، ژورنال)", list(TOOL_PERMISSIONS))
 ACTION_NAMES = frozenset({"mgr_grant", "mgr_extend", "mgr_revoke", "mgr_full_access", "mgr_preset", "mgr_capability_set", "mgr_directive",
-                          "mgr_announce_config", "mgr_announce_send", "mgr_schedule", "mgr_round_now"})
+                          "mgr_announce_config", "mgr_announce_send", "mgr_schedule", "mgr_round_now", "mgr_initiative"})
 CONFIRM = frozenset({"mgr_grant", "mgr_extend", "mgr_full_access"})
 
 _S = {"type": "string"}
@@ -1004,6 +1019,8 @@ TOOL_DECLARATIONS = [
      "parameters": {"type": "object", "properties": {"note": _S}}},
     {"name": "mgr_schedule", "description": "برنامه‌ی دورها: interval_hours (۱ تا ۷۲)، daily_time (HH:MM وقتِ تهران)، autonomous (روشن/خاموشِ دورهای خودکار)، daily_review (روشن/خاموشِ بررسیِ روزانه).",
      "parameters": {"type": "object", "properties": {"interval_hours": _I, "interval_minutes": _I, "daily_time": _S, "autonomous": _B, "daily_review": _B}}},
+    {"name": "mgr_initiative", "description": "سطحِ ابتکارِ رهگشای مدیر: report (فقط گزارش) | active (پیگیریِ موارد صف؛ پیش‌فرض) | proactive (علاوه بر صف، کارِ ابتکاری).",
+     "parameters": {"type": "object", "properties": {"level": _S}, "required": ["level"]}},
     {"name": "mgr_memory", "description": "یادداشت‌های ماندگارِ رهگشای مدیر؛ action: list | clear.",
      "parameters": {"type": "object", "properties": {"action": _S}}},
 ]
@@ -1217,6 +1234,15 @@ async def dispatch_tool(name, args, caller_id, caller_role, ctx):
                 st["caps"][cap] = bool(args[k])
         await save_state(st)
         return f"✅ برنامه: هر {st['interval_min']} دقیقه | بررسیِ روزانه {st['daily_time']}"
+    if name == "mgr_initiative":
+        lvl = str(args.get("level") or "").strip().lower()
+        if lvl not in wq.INITIATIVE:
+            return "❌ level باید report | active | proactive باشد."
+        st = await get_state(force=True)
+        st["initiative"] = lvl
+        await save_state(st)
+        await journal("caps", "تغییرِ سطحِ ابتکار", wq.INITIATIVE_FA[lvl])
+        return f"✅ سطحِ ابتکارِ رهگشا: {wq.INITIATIVE_FA[lvl]}"
     if name == "mgr_memory":
         if args.get("action") == "clear":
             await _exec("UPDATE mgr_memory SET active=0")

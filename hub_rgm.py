@@ -117,6 +117,15 @@ async def _journal(kind=None, limit=20, before=None, full=False):
     return out
 
 
+async def _queue():
+    try:
+        import ai_workqueue as wq
+        return await wq.build(include_cooling=True)
+    except Exception:
+        logger.info("rgm overview: queue failed", exc_info=True)
+        return []
+
+
 async def _overview():
     import ai_manager as am
     import ai_guardian as gd
@@ -163,7 +172,7 @@ async def _overview():
         risk.append(line)
     return {
         "ok": True, "now": _iso(now), "now_fa": _dt(now),
-        "mgr": {"active": bool(st["active"]), "timer": timer, "directive": st["directive"], "full_access": bool(st["full_access"]),
+        "mgr": {"active": bool(st["active"]), "initiative": st.get("initiative", "active"), "timer": timer, "directive": st["directive"], "full_access": bool(st["full_access"]),
                 "interval_min": st["interval_min"], "daily_time": st["daily_time"], "next_round": _iso(am._pdt(st["next_round"])),
                 "next_round_fa": _dt(am._pdt(st["next_round"])), "last_round_fa": _dt(am._pdt(st["last_round"])),
                 "announce": st["announce"], "report": st["report"], "grant_count": st["grant_count"], "fail_streak": st["fail_streak"],
@@ -171,6 +180,8 @@ async def _overview():
                 "usage": {k: int(v) for k, v in u.items()},
                 "limits": dict(zip(("writes", "destructive", "hops"), am.limits(st)))},
         "caps": caps,
+        "queue": [{"key": t["key"], "prio": t["prio"], "kind": t["kind"], "title": t["title"], "evidence": t["evidence"], "tools": t["tools"], "cooling": t["cooling"]}
+                  for t in await _queue()],
         "guard": {"enabled": gs["enabled"], "mode": gs["mode"], "eff_mode": gd._fast["mode"], "sens": gs["sens"], "always": gs["always"],
                   "auto_undo": gs["auto_undo"], "auto_lockdown": gs["auto_lockdown"], "ops_group": gs["ops_group"],
                   "locked": bool(lk["on"]), "lock_reason": lk.get("reason", ""), "lock_since_fa": _dt(am._pdt(lk.get("since"))), "lock_by": lk.get("by", ""),
@@ -347,6 +358,8 @@ async def rgm_act(request):
             res = await tool("mgr_announce_send", {k: b[k] for k in ("text", "admins_mode", "admins", "ops_group", "announcement_group") if k in b})
         elif a == "mgr_schedule":
             res = await tool("mgr_schedule", {k: b[k] for k in ("interval_minutes", "interval_hours", "daily_time", "autonomous", "daily_review") if k in b})
+        elif a == "mgr_initiative":
+            res = await tool("mgr_initiative", {"level": b.get("level")})
         elif a == "mgr_round":
             asyncio.create_task(am.run_round(bot, "manual", str(b.get("note") or "")[:300]))
             res = "🧠 یک دورِ مدیریتی شروع شد؛ نتیجه در ژورنال و پیوی شما می‌آید."
