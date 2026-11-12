@@ -3,7 +3,7 @@
    • هیچ innerHTML با داده‌ی کاربر؛ فقط textContent؛ انیمیشن‌ها فقط transform/opacity و با prefers-reduced-motion خاموش می‌شوند */
 (function () {
   'use strict';
-  var BUILD = 'fx4', NS = 'http://www.w3.org/2000/svg';
+  var BUILD = 'fx5', NS = 'http://www.w3.org/2000/svg';
   var h, ic, hx, tg, toast, LS, api, Sheet, goHome, openChat;
   var root, hdrEl, heroEl, navEl, bodyEl;
   var D = null, fetchedAt = 0, view = 'over', shown = false, pollT = 0, tickT = 0, loading = false, rendered = false;
@@ -291,7 +291,7 @@
     out.push(card('آخرین برداشتِ رهگشا', 'brain', [lastRound
       ? div('rgm-think', [div('dots', [h('i'), h('i'), h('i')]), h('p', { text: (lastRound.body || '').replace(/\n+/g, ' ').slice(0, 220) || 'گزارشی ثبت نشده.' }), div('mt', [sp(ago(lastRound.ts)), btn('خواندنِ کامل', 'sm', function () { jSheet(lastRound.id); })])])
       : empty('هنوز دورِ مدیریتی‌ای انجام نشده.')]));
-    /* اقدام‌های سریع (بکاپ/گزارش/دور) برای وضوحِ بیشتر در خودِ بدنه هم هست */
+    out.push(queueCard());
     var evs = [];
     D.incidents.slice(0, 5).forEach(function (i) { evs.push({ t: i.ts, k: 'sec', lv: i.level, a: i.title, b: i.actor_name }); });
     D.journal.slice(0, 6).forEach(function (j) { evs.push({ t: j.ts, k: 'ai', ok: j.ok, a: j.title, b: ((j.body || '').split('\n')[0] || '').slice(0, 70) }); });
@@ -301,6 +301,19 @@
     }))] : [empty('هنوز رویدادی ثبت نشده.')]));
     if (D.risk.length) out.push(card('ریسکِ لحظه‌ایِ مدیران', 'alert', D.risk.map(function (r) { return li(r.replace(/^- /, ''), null); })));
     return out;
+  }
+
+  /* صفِ کارِ رهگشا: کارهای عملیاتیِ واقعی که از دیتابیس درمی‌آیند */
+  var QICON = { match: '♟️', task: '📌', access: '🔑', admin: '👤', player: '⚠️', tournament: '🏆', ops: '🧩' };
+  function queueCard() {
+    var q = D.queue || [], open = q.filter(function (t) { return !t.cooling; }), ini = D.mgr.initiative || 'active';
+    var kids = q.length ? [div('rgm-queue', q.map(function (t) {
+      var ev = div('qe', t.evidence.map(function (e) { return div('', [e]); })), row = div('qt' + (t.cooling ? ' cool' : '') + (t.prio >= 2 ? ' hi' : ''), [
+        div('qh', [h('span', { class: 'qi', text: QICON[t.kind] || '•' }), div('qm', [h('b', { text: t.title }), h('small', { text: t.cooling ? 'به‌تازگی پیگیری شد' : (t.prio >= 2 ? 'اولویتِ بالا' : 'اولویتِ عادی') })]), ic('chev')]), ev]);
+      row.querySelector('.qh').addEventListener('click', function () { hx.sel(); row.classList.toggle('open'); }); return row;
+    }))] : [empty('الان کارِ بازی در صف نیست 🎉')];
+    kids.push(h('p', { class: 'rgm-sub', style: 'margin:10px 0 0', text: 'رهگشا در هر دور برای هر مورد اقدام می‌کند یا دلیلِ نکردن را می‌نویسد. سطحِ ابتکار: «' + ({ report: 'گزارش‌دهنده', active: 'فعال', proactive: 'پیش‌قدم' }[ini] || ini) + '» (از تنظیمات عوض می‌شود).' }));
+    return card('صفِ کارِ رهگشا', 'list', kids, '', sp(fa(open.length) + ' باز', 'rgm-tag' + (open.length ? ' l1' : ' ok')));
   }
 
   /* ═════════ ۲) اختیارات (کاشی‌ها) ═════════ */
@@ -481,6 +494,11 @@
     out.push(acc('dir', 'دستورِ اختصاصی', 'pencil', [h('p', { class: 'rgm-sub', text: 'وظیفه‌ی اجباریِ هر دور؛ بر هر چیز مقدم است. با ذخیره، رهگشا همان لحظه اجرایش می‌کند و برای هر بند وضعیت می‌دهد.' }),
       div('rgm-chips', TEMPLATES.map(function (t) { return h('button', { type: 'button', class: 'rgm-chip', onclick: function () { ta.value = (ta.value ? ta.value.trim() + '\n' : '') + t[1]; ta.dispatchEvent(new Event('input')); } }, '＋ ' + t[0]); })),
       ta, div('rgm-cnt', [cnt]), div('rgm-row', [btn('ذخیره و اجرا', 'p', function () { act({ a: 'mgr_directive', mode: 'set', text: ta.value }); }, 'bolt'), btn('پاک', '', function () { act({ a: 'mgr_directive', mode: 'clear' }); }, 'trash')])], m.directive ? fa(m.directive.length) + ' نویسه' : 'خالی'));
+    var ini = m.initiative || 'active';
+    out.push(acc('ini', 'ابتکارِ رهگشا', 'bolt', [h('p', { class: 'rgm-sub', text: 'رهگشا فقط وقتی کارِ غیرامنیتی می‌کند که چیزی جلوی چشمش باشد. «صفِ کار» هر دور از دیتابیس ساخته می‌شود (مسابقه‌ی بدونِ نتیجه، وظیفه‌ی معوق، مدیرِ غایب، درخواستِ دسترسیِ معطل، ...). این کلید تعیین می‌کند با آن چه کند.' }),
+      div('rgm-mode', [['report', 'گزارش‌دهنده', 'eye', 'فقط می‌بیند و گزارش می‌دهد؛ اقدامِ عملیاتی نمی‌کند.'], ['active', 'فعال', 'bolt', 'موارد صف را خودش پیگیری می‌کند: یادآوری، پیام، وظیفه، تحلیل.'], ['proactive', 'پیش‌قدم', 'sparkle', 'علاوه بر صف، هر دور تا ۳ کارِ ابتکاری هم می‌کند.']].map(function (x) {
+        return h('button', { type: 'button', class: 'rgm-mc' + (ini === x[0] ? ' on' : ''), style: 'flex:none;width:100%;margin-bottom:8px', onclick: function () { hx.sel(); act({ a: 'mgr_initiative', level: x[0] }); } }, h('span', { class: 'mi' }, ic(x[2])), h('b', { text: x[1] }), h('small', { text: x[3] }));
+      }))], ({ report: 'گزارش‌دهنده', active: 'فعال', proactive: 'پیش‌قدم' })[ini]));
     var iv = [[15, '۱۵د'], [30, '۳۰د'], [60, '۱س'], [120, '۲س'], [180, '۳س'], [360, '۶س'], [720, '۱۲س'], [1440, '۲۴س']];
     var tm = h('input', { class: 'rgm-in', type: 'time', value: m.daily_time, style: 'direction:ltr;text-align:center', onchange: function (e) { act({ a: 'mgr_schedule', daily_time: e.target.value }); } });
     out.push(acc('sch', 'زمان‌بندیِ دورها', 'clock', [h('p', { class: 'rgm-sub', text: 'هرچه کوتاه‌تر، رهگشا فعال‌تر (و مصرفِ هوش مصنوعی بیشتر).' }),
