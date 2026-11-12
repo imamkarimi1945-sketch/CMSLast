@@ -773,7 +773,7 @@
     if (clockState === 1) return;
     clockState = 1;
     var s = doc.createElement('script');
-    s.src = 'clock.js?v=' + V + '&b=fx3';
+    s.src = 'clock.js?v=' + V + '&b=fx4';
     s.onload = function () { clockState = 2; window.HubClock.mount($('#tab-clock'), { h: h, ic: ic, hx: hx, tg: tg, Sheet: Sheet, toast: toast, LS: LS }); if (cb) cb(); };
     s.onerror = function () { clockState = 0; toast('بارگذاری ساعت ناموفق بود'); };
     doc.head.append(s);
@@ -785,10 +785,10 @@
     if (bfState) return;
     bfState = 1;
     if (!doc.getElementById('bf-css')) {
-      var l = doc.createElement('link'); l.id = 'bf-css'; l.rel = 'stylesheet'; l.href = 'brief.css?v=' + V + '&b=fx3'; doc.head.append(l);
+      var l = doc.createElement('link'); l.id = 'bf-css'; l.rel = 'stylesheet'; l.href = 'brief.css?v=' + V + '&b=fx4'; doc.head.append(l);
     }
     var s = doc.createElement('script');
-    s.src = 'brief.js?v=' + V + '&b=fx3';
+    s.src = 'brief.js?v=' + V + '&b=fx4';
     s.onload = function () {
       bfState = 2;
       window.HubBrief.mount($('#tab-brief'), { h: h, ic: ic, hx: hx, tg: tg, toast: toast, LS: LS, api: api, goHome: function () { go('home'); } });
@@ -803,10 +803,10 @@
     if (rgmState) return;
     rgmState = 1;
     if (!doc.getElementById('rgm-css')) {
-      var l = doc.createElement('link'); l.id = 'rgm-css'; l.rel = 'stylesheet'; l.href = 'rgm.css?v=' + V + '&b=fx3'; doc.head.append(l);
+      var l = doc.createElement('link'); l.id = 'rgm-css'; l.rel = 'stylesheet'; l.href = 'rgm.css?v=' + V + '&b=fx4'; doc.head.append(l);
     }
     var s = doc.createElement('script');
-    s.src = 'rgm.js?v=' + V + '&b=fx3';
+    s.src = 'rgm.js?v=' + V + '&b=fx4';
     s.onload = function () {
       rgmState = 2;
       window.HubRgm.mount($('#tab-rgm'), { h: h, ic: ic, hx: hx, tg: tg, toast: toast, LS: LS, api: api, Sheet: Sheet, goHome: function () { go('home'); }, openChat: function () { openRahgosha(); } });
@@ -821,7 +821,7 @@
     var el = h('button', { type: 'button', class: 'rgm-entry', 'data-s': 'off', 'aria-label': 'مرکز فرماندهیِ رهگشا', onclick: function () { hx.tap(); go('rgm'); } },
       h('span', { class: 'ei' }, ic('shield')), h('span', { class: 'em' }, h('b', { text: 'مرکزِ فرماندهیِ رهگشا' }), st), h('i', { class: 'ed' }));
     if (!doc.getElementById('rgm-css')) {
-      var l = doc.createElement('link'); l.id = 'rgm-css'; l.rel = 'stylesheet'; l.href = 'rgm.css?v=' + V + '&b=fx3'; doc.head.append(l);
+      var l = doc.createElement('link'); l.id = 'rgm-css'; l.rel = 'stylesheet'; l.href = 'rgm.css?v=' + V + '&b=fx4'; doc.head.append(l);
     }
     function poll() {
       if (doc.hidden || cur !== 'home') return;
@@ -851,11 +851,11 @@
     if (rgState === 1) return;
     rgState = 1;
     if (!doc.getElementById('rg-css')) {
-      var l = doc.createElement('link'); l.id = 'rg-css'; l.rel = 'stylesheet'; l.href = 'rahgosha.css?v=' + V + '&b=fx3'; doc.head.append(l);
+      var l = doc.createElement('link'); l.id = 'rg-css'; l.rel = 'stylesheet'; l.href = 'rahgosha.css?v=' + V + '&b=fx4'; doc.head.append(l);
       var f = doc.createElement('link'); f.rel = 'stylesheet'; f.href = 'https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@400;500&display=swap'; doc.head.append(f);
     }
     var s = doc.createElement('script');
-    s.src = 'rahgosha.js?v=' + V + '&b=fx3';
+    s.src = 'rahgosha.js?v=' + V + '&b=fx4';
     s.onload = function () {
       rgState = 2;
       window.HubRahgosha.mount(rgEl, { tg: tg, hx: hx, LS: LS, api: api, toast: toast, close: closeRahgosha });
@@ -895,8 +895,8 @@
     if (!fab) return;
     fab.addEventListener('click', openRahgosha);
     /* پیش‌بارگیریِ بی‌صدا تا با اولین لمس فوری باز شود */
-    var a = doc.createElement('link'); a.rel = 'prefetch'; a.as = 'script'; a.href = 'rahgosha.js?v=' + V + '&b=fx3'; doc.head.append(a);
-    var b = doc.createElement('link'); b.rel = 'prefetch'; b.as = 'style'; b.href = 'rahgosha.css?v=' + V + '&b=fx3'; doc.head.append(b);
+    var a = doc.createElement('link'); a.rel = 'prefetch'; a.as = 'script'; a.href = 'rahgosha.js?v=' + V + '&b=fx4'; doc.head.append(a);
+    var b = doc.createElement('link'); b.rel = 'prefetch'; b.as = 'style'; b.href = 'rahgosha.css?v=' + V + '&b=fx4'; doc.head.append(b);
   })();
 
   /* ─── آب‌وهوا (تنبل) ───────────────────────────────────────── */
@@ -906,10 +906,10 @@
     if (wxState === 1) return;
     wxState = 1;
     if (!doc.getElementById('wx-css')) {
-      var l = doc.createElement('link'); l.id = 'wx-css'; l.rel = 'stylesheet'; l.href = 'weather.css?v=' + V + '&b=fx3'; doc.head.append(l);
+      var l = doc.createElement('link'); l.id = 'wx-css'; l.rel = 'stylesheet'; l.href = 'weather.css?v=' + V + '&b=fx4'; doc.head.append(l);
     }
     var s = doc.createElement('script');
-    s.src = 'weather.js?v=' + V + '&b=fx3';
+    s.src = 'weather.js?v=' + V + '&b=fx4';
     s.onload = function () {
       wxState = 2;
       window.HubWeather.mount($('#tab-weather'), { h: h, ic: ic, hx: hx, tg: tg, toast: toast, LS: LS, api: api, goHome: function () { go('home'); } });
@@ -920,8 +920,8 @@
   }
   function loadWeatherLater() {
     if (wxState) return;
-    var a = doc.createElement('link'); a.rel = 'prefetch'; a.as = 'script'; a.href = 'weather.js?v=' + V + '&b=fx3'; doc.head.append(a);
-    var b = doc.createElement('link'); b.rel = 'prefetch'; b.as = 'style'; b.href = 'weather.css?v=' + V + '&b=fx3'; doc.head.append(b);
+    var a = doc.createElement('link'); a.rel = 'prefetch'; a.as = 'script'; a.href = 'weather.js?v=' + V + '&b=fx4'; doc.head.append(a);
+    var b = doc.createElement('link'); b.rel = 'prefetch'; b.as = 'style'; b.href = 'weather.css?v=' + V + '&b=fx4'; doc.head.append(b);
   }
 
   /* نوارِ آب‌وهوا در خانه: یک ردیفِ کوتاه (آیکون + دما + یک جمله‌ی مرتبط با همان وضعیت).
@@ -1091,7 +1091,7 @@
   var M = null, mLoading = false, mQueue = [];
   function loadScript(src) {
     return new Promise(function (ok, no) {
-      var s = doc.createElement('script'); s.src = src + '?v=' + V + '&b=fx3'; s.onload = ok; s.onerror = no; doc.head.append(s);
+      var s = doc.createElement('script'); s.src = src + '?v=' + V + '&b=fx4'; s.onload = ok; s.onerror = no; doc.head.append(s);
     });
   }
   function withManage(fn) {
@@ -1349,7 +1349,7 @@
   }
   function loadClockLater() { /* پیش‌بارگیریِ فایل بدونِ نمایش */
     if (clockState) return;
-    var l = doc.createElement('link'); l.rel = 'prefetch'; l.as = 'script'; l.href = 'clock.js?v=' + V + '&b=fx3'; doc.head.append(l);
+    var l = doc.createElement('link'); l.rel = 'prefetch'; l.as = 'script'; l.href = 'clock.js?v=' + V + '&b=fx4'; doc.head.append(l);
   }
 
   start();

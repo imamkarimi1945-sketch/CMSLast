@@ -3,12 +3,12 @@
    • هیچ innerHTML با داده‌ی کاربر؛ فقط textContent؛ انیمیشن‌ها فقط transform/opacity و با prefers-reduced-motion خاموش می‌شوند */
 (function () {
   'use strict';
-  var BUILD = 'fx3', NS = 'http://www.w3.org/2000/svg';
+  var BUILD = 'fx4', NS = 'http://www.w3.org/2000/svg';
   var h, ic, hx, tg, toast, LS, api, Sheet, goHome, openChat;
   var root, hdrEl, heroEl, navEl, bodyEl;
   var D = null, fetchedAt = 0, view = 'over', shown = false, pollT = 0, tickT = 0, loading = false, rendered = false;
   var F = { journal: 'all', capq: '', inc: 'open', acc: { dir: true } }, JR = { items: [], more: true, busy: false }, PPL = null;
-  var animIn = false, kIdx = 0, PT = { x: 180, y: 420 }, cntRaf = 0, heroSig = '', gidN = 0, H = {}, NAV = {}, fabWas = '';
+  var FX = 'balanced', animIn = false, kIdx = 0, PT = { x: 180, y: 420 }, cntRaf = 0, heroSig = '', gidN = 0, H = {}, NAV = {}, fabWas = '';
 
   /* ═════════ ابزارها ═════════ */
   function fa(n) { return String(n == null ? '' : n).replace(/[0-9]/g, function (d) { return '۰۱۲۳۴۵۶۷۸۹'[+d]; }); }
@@ -91,10 +91,19 @@
     })(t0);
   }
 
+  /* سطحِ جلوه‌ها: ذخیره در localStorage؛ بدونِ انتخاب، روی گوشی‌های ضعیف خودکار «سبک» */
+  function pickFx() {
+    var v = LS && LS.get && LS.get('rgm_fx');
+    if (v === 'full' || v === 'balanced' || v === 'lite') return v;
+    var lowEnd = (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 3;
+    return lowEnd ? 'lite' : 'balanced';
+  }
+  function setFx(v) { FX = v; if (LS && LS.set) LS.set('rgm_fx', v); if (root) root.dataset.fx = v; }
+
   /* انفجارِ ذرات + موجِ لمس */
   var BURST = { mgr_grant: '#22c55e', gd_unlock: '#22c55e', gd_close: '#38bdf8', gd_release: '#a78bfa', mgr_full: '#f59e0b', gd_lock: '#ef4444', mgr_revoke: '#94a3b8', gd_contain: '#f97316', mgr_directive: '#38bdf8' };
   function burst(x, y, color) {
-    if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (FX === 'lite' || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) return;
     var box = h('div', { class: 'rgm-burst' });
     for (var i = 0; i < 18; i++) {
       var ang = Math.PI * 2 * i / 18 + Math.random() * .4, dist = 50 + Math.random() * 70, pt = h('i', { class: i % 3 ? 'c' : 'r' });
@@ -111,6 +120,7 @@
   function onPointer(e) {
     if (!shown) return;
     PT = { x: e.clientX, y: e.clientY };
+    if (FX === 'lite') return;
     var t = e.target && e.target.closest && e.target.closest('.rgm-b,.rgm-chip,.rgm-mc,.rgm-nav button,.rgm-sw,.rgm-seg button,.dk,.rgm-tile');
     if (t) ripple(t, e);
   }
@@ -251,7 +261,7 @@
   function renderBody(animate) {
     if (!D) { bodyEl.replaceChildren(skeleton()); return; }
     var y = window.scrollY, fn = { over: bodyOver, caps: bodyCaps, guard: bodyGuard, jr: bodyJournal, set: bodySet }[view];
-    animIn = !!animate; kIdx = 0;
+    animIn = !!animate && FX !== 'lite'; kIdx = 0;
     bodyEl.replaceChildren.apply(bodyEl, fn());
     if (animIn) {
       Array.prototype.forEach.call(bodyEl.children, function (c, i) { if (!c.classList.contains('rgm-bento')) { c.classList.add('rgm-enter'); c.style.setProperty('--i', Math.min(i, 9)); } });
@@ -488,6 +498,8 @@
     out.push(acc('sys', 'کنترلِ سیستم', 'gear', [h('p', { class: 'rgm-sub', text: 'وضعیتِ کلیِ ربات (همان که در «پنل مدیر ارشد» هست).' }),
       seg([['normal', 'عادی'], ['bad', 'احتیاط'], ['danger', 'خطر'], ['aps', 'APS']], D.kpi.system_status, function (v) { confirmSheet('تغییرِ وضعیتِ سیستم', 'وضعیت به «' + v + '» می‌رود و مدیرها تحتِ تأثیر قرار می‌گیرند.', 'تغییر بده', v !== 'normal', function () { act({ a: 'sys_status', status: v }); }); }),
       h('div', { style: 'height:8px' }), li('رهگشا (چتِ هوشمند)', 'خاموش‌شدن یعنی هیچ مدیری با رهگشا گفتگو نمی‌کند.', sw(D.kpi.ai_online, function (v) { act({ a: 'sys_ai_online', on: v }); }))], D.kpi.system_status));
+    out.push(acc('fx', 'جلوه‌های بصری', 'sparkle', [h('p', { class: 'rgm-sub', text: 'اگر پنل روی گوشی‌تان سنگین است، «سبک» را بزنید. «متعادل» نشانِ سپر، ورودِ پله‌ای و نمودارها را نگه می‌دارد و فقط حرکت‌های بی‌پایانِ پس‌زمینه را خاموش می‌کند.' }),
+      seg([['lite', 'سبک'], ['balanced', 'متعادل'], ['full', 'کامل']], FX, function (v) { setFx(v); renderBody(); })], ({ lite: 'سبک', balanced: 'متعادل', full: 'کامل' })[FX]));
     out.push(acc('use', 'آمارِ استفاده', 'pulse', [div('rgm-ustats', [['کلِ زمانِ مدیریت', dur(m.usage.total)], ['امروز', dur(m.usage.today)], ['۷ روزِ اخیر', dur(m.usage.week)], ['طولانی‌ترین دوره', dur(m.usage.longest)], ['تعدادِ دوره‌ها', fa(m.usage.count) + ' بار'], ['نوبتِ اعطا', fa(m.grant_count)]].map(function (x) { return div('us', [h('b', { text: x[1] }), h('small', { text: x[0] })]); }))]));
     return out;
   }
@@ -517,13 +529,13 @@
   }
   function onShow() {
     shown = true; fab(true); load(!D); clearInterval(pollT); clearInterval(tickT);
-    pollT = setInterval(function () { if (!document.hidden) load(false); }, 9000); tickT = setInterval(tick, 1000);
+    pollT = setInterval(function () { if (!document.hidden) load(false); }, 12000); tickT = setInterval(tick, 1000);
   }
   function onHide() { shown = false; fab(false); clearInterval(pollT); clearInterval(tickT); }
   function open(v) { if (v && TABS.some(function (t) { return t[0] === v; })) { view = v; updateNav(); if (D) renderBody(true); } }
   function mount(el, ctx) {
     h = ctx.h; ic = ctx.ic; hx = ctx.hx; tg = ctx.tg; toast = ctx.toast; LS = ctx.LS; api = ctx.api; Sheet = ctx.Sheet; goHome = ctx.goHome; openChat = ctx.openChat;
-    root = el; el.replaceChildren();
+    root = el; el.replaceChildren(); setFx(pickFx());
     hdrEl = h('header', { class: 'rgm-hdr' }); heroEl = h('section', { class: 'rgm-hero', 'data-s': 'off', 'data-lv': '0' });
     navEl = h('nav', { class: 'rgm-nav', 'aria-label': 'بخش‌های مرکز فرماندهی' }); bodyEl = h('div', { class: 'rgm-body' });
     el.append(hdrEl, heroEl, navEl, bodyEl);
