@@ -180,6 +180,7 @@ async def _overview():
                 "usage": {k: int(v) for k, v in u.items()},
                 "limits": dict(zip(("writes", "destructive", "hops"), am.limits(st)))},
         "caps": caps,
+        "diag": [{"lvl": l, "text": t} for l, t in await am.diagnose(st)],
         "queue": [{"key": t["key"], "prio": t["prio"], "kind": t["kind"], "title": t["title"], "evidence": t["evidence"], "tools": t["tools"], "cooling": t["cooling"]}
                   for t in await _queue()],
         "guard": {"enabled": gs["enabled"], "mode": gs["mode"], "eff_mode": gd._fast["mode"], "sens": gs["sens"], "always": gs["always"],

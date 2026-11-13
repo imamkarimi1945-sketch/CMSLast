@@ -58,6 +58,7 @@ MAX_WRITES_PER_ROUND = 40            # پیش‌فرض (قبلاً ۲۵)
 MAX_DESTRUCTIVE_PER_ROUND = 8        # قبلاً ۵
 MAX_HOPS = 24                        # قبلاً ۱۴
 FULL_WRITES, FULL_DESTRUCTIVE, FULL_HOPS = 80, 15, 36     # سقفِ «دسترسیِ کامل»
+ROUND_TIMEOUT = 780                 # یک دور بیش از ۱۳ دقیقه نباید طول بکشد؛ وگرنه قفلِ دور برای همیشه گیر می‌کرد و دورهای بعدی بی‌صدا رد می‌شدند
 FORCE_READ_HOPS = 2                  # دو قدمِ اولِ هر دور اجباراً «خواندن» است (قبلاً مدل می‌توانست بی‌هیچ ابزاری گزارشِ «اقدامی لازم نبود» بدهد)
 
 
@@ -146,7 +147,7 @@ DEFAULT_STATE = {
     "announce": {"on": False, "admins": "all", "ids": [], "ops_group": True, "ann_group": False},
     "report": {"boss_pm": True, "ops_group": False},
     "interval_min": 120, "sched_v": 2, "daily_time": "22:00", "next_round": None, "last_round": None, "last_daily": "",
-    "grant_count": 0, "fail_streak": 0, "warned": [], "initiative": "active",
+    "grant_count": 0, "fail_streak": 0, "warned": [], "initiative": "active", "wd_t": None,
 }
 _cache = {"t": 0.0, "v": None}
 
@@ -338,6 +339,8 @@ async def session_digest(session_id=None):
         L += [f"• {x}" for x in acts[:14]] + ([f"… و {fa(len(acts) - 14)} مورد دیگر"] if len(acts) > 14 else [])
     else:
         L.append("اقدامِ تغییردهنده‌ای انجام نشد.")
+    if not rounds and not s["ended_at"]:
+        L.append("🩺 چرا دوری ثبت نشده:\n" + diag_text(await diagnose()))
     if denied:
         L.append("ردشده (قفل/سقف/خطا): " + " | ".join(denied[:4]))
     if qs:
@@ -802,7 +805,25 @@ _round_lock = asyncio.Lock()
 
 
 async def run_round(bot, trigger="periodic", note="") -> str:
-    """یک دورِ مدیریتی. → متنِ گزارش (یا پیامِ خطا)."""
+    """یک دورِ مدیریتی با سقفِ زمان. → متنِ گزارش (یا پیامِ خطا)."""
+    try:
+        return await asyncio.wait_for(_run_round_inner(bot, trigger, note), ROUND_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning("manager round timed out (%s)", trigger)
+        try:
+            st = await get_state(force=True)
+            st["fail_streak"] = int(st["fail_streak"]) + 1
+            st["next_round"] = _iso(now_teh() + timedelta(minutes=max(15, int(st["interval_min"]) // 4)))
+            await save_state(st)
+            await journal("round", f"دورِ {trigger} متوقف شد (زمان‌سنج)", f"دور بیش از {ROUND_TIMEOUT // 60} دقیقه طول کشید و قطع شد (معمولاً کندیِ Gemini).", trigger, ok=False)
+            if st["fail_streak"] in (1, 3):
+                await _boss(bot, f"⚠️ یک دورِ رهگشای مدیر بیش از {fa(ROUND_TIMEOUT // 60)} دقیقه طول کشید و متوقف شد؛ دورِ بعدی زودتر تلاش می‌شود.")
+        except Exception:
+            logger.info("timeout handling failed", exc_info=True)
+        return "⚠️ دور بیش از حدِ مجاز طول کشید و متوقف شد."
+
+
+async def _run_round_inner(bot, trigger="periodic", note="") -> str:
     if not _main_ok():
         return "⛔ فقط روی سرورِ اصلی."
     if _round_lock.locked():
@@ -813,6 +834,7 @@ async def run_round(bot, trigger="periodic", note="") -> str:
             return "⚪️ رهگشای مدیر خاموش است."
         from config import GEMINI_API_KEY
         if not GEMINI_API_KEY:
+            await journal("round", f"دورِ {trigger} اجرا نشد", "کلیدِ Gemini تنظیم نشده.", trigger, ok=False)
             return "⚠️ کلیدِ Gemini تنظیم نشده."
         import ai_assistant as aia
         import ai_tools
@@ -913,6 +935,47 @@ async def _deliver_report(bot, st, text):
 
 
 # ═══════════════════════ جاب ═══════════════════════
+async def diagnose(st=None) -> list:
+    """چراییِ «دور نمی‌زند»: فهرستِ (سطح، متن) با سطح‌های ok | warn | bad."""
+    st = st or await get_state(force=True)
+    if not st["active"]:
+        return [("ok", "رهگشای مدیر خاموش است؛ دورِ خودکار لازم نیست.")]
+    out, now, caps = [], now_teh(), eff_caps(st)
+    try:
+        from config import GEMINI_API_KEY
+        if not GEMINI_API_KEY:
+            out.append(("bad", "کلیدِ Gemini تنظیم نشده؛ هیچ دوری اجرا نمی‌شود."))
+    except Exception:
+        pass
+    nr = _pdt(st["next_round"])
+    if not caps.get("autonomous_rounds"):
+        out.append(("bad", "«دورهای خودکار» خاموش است؛ رهگشا فقط وقتی دستی دور بزنید کار می‌کند."))
+    elif not nr:
+        out.append(("bad", "زمانِ دورِ بعدی ثبت نشده؛ زمان‌بند دور نمی‌زند (خودکار ترمیم می‌شود)."))
+    else:
+        out.append(("ok", f"دورِ بعدی: {jfmt(nr)}"))
+    if _round_lock.locked():
+        out.append(("warn", "یک دور همین الان در حالِ اجراست."))
+    lr = await _rows("SELECT ts, ok, body FROM mgr_journal WHERE kind='round' ORDER BY id DESC LIMIT 1")
+    iv = int(st["interval_min"])
+    if lr:
+        lt = _pdt(lr[0]["ts"])
+        age = (now - lt).total_seconds() / 60 if lt else None
+        if age is not None and age > max(iv * 1.6, iv + 45):
+            out.append(("warn", f"آخرین دور {int(age // 60)} ساعت و {int(age % 60)} دقیقه پیش بوده (فاصله‌ی تنظیم‌شده {iv} دقیقه)."))
+        if not lr[0]["ok"]:
+            out.append(("warn", "آخرین دور ناموفق بود: " + str(lr[0]["body"] or "")[:140]))
+    else:
+        out.append(("warn", "از شروعِ این دوره هنوز هیچ دوری ثبت نشده."))
+    if int(st["fail_streak"]):
+        out.append(("warn", f"{fa(st['fail_streak'])} دورِ پیاپی ناموفق بوده."))
+    return out
+
+
+def diag_text(items) -> str:
+    return "\n".join(("✅ " if l == "ok" else "⚠️ " if l == "warn" else "⛔ ") + t for l, t in items)
+
+
 async def _tick(context):
     if not _main_ok():
         return
@@ -949,6 +1012,25 @@ async def _tick(context):
                     st["next_round"] = _iso(now + timedelta(minutes=int(st["interval_min"])))   # جلوگیری از تکرار تا پایانِ دور
                     await save_state(st)
                     asyncio.create_task(run_round(context.bot, "periodic"))
+                elif caps.get("autonomous_rounds") and not nr:
+                    st["next_round"] = _iso(now + timedelta(seconds=60))                        # ترمیمِ زمان‌بندِ گم‌شده
+                    await save_state(st)
+                if not _round_lock.locked():
+                    # نگهبانِ زمان‌بند: اگر خیلی وقت است هیچ دوری ثبت نشده، علت را بگو (و اگر دورِ خودکار روشن است، همین الان یک دور بزن)
+                    lr = await _rows("SELECT ts FROM mgr_journal WHERE kind='round' ORDER BY id DESC LIMIT 1")
+                    ref = _pdt(lr[0]["ts"]) if lr else _pdt(st["started_at"])
+                    iv = int(st["interval_min"])
+                    wd = _pdt(st.get("wd_t"))
+                    if ref and (now - ref).total_seconds() / 60 > max(iv * 1.6, iv + 45) and (not wd or (now - wd).total_seconds() > 7200):
+                        st["wd_t"] = _iso(now)
+                        fix = bool(caps.get("autonomous_rounds"))
+                        if fix:
+                            st["next_round"] = _iso(now + timedelta(minutes=iv))
+                        await save_state(st)
+                        why = diag_text(await diagnose(st))
+                        await _boss(context.bot, "⚠️ <b>رهگشای مدیر مدتی است دور نزده.</b>\n" + h(why) + ("\n\nهمین الان یک دورِ جبرانی اجرا می‌کنم." if fix else "\n\nبرای فعال‌سازی: پنل ← تنظیمات ← زمان‌بندی ← «دورهای خودکار»."))
+                        if fix:
+                            asyncio.create_task(run_round(context.bot, "periodic", "نگهبانِ زمان‌بند: دورِ جبرانی چون مدتی دور ثبت نشده بود."))
         import ai_manager_panel
         await ai_manager_panel.refresh_live(context.bot)
     except Exception:
@@ -1061,6 +1143,7 @@ async def _status_text() -> str:
     lines.append(f"🧾 گزارشِ دورها: به من {'✔' if r['boss_pm'] else '✖'} | به گروه {'✔' if r['ops_group'] else '✖'}")
     lines.append(f"🔄 هر {st['interval_min'] // 60} ساعت | بررسیِ روزانه {st['daily_time']} | دورِ بعدی: {jfmt(_pdt(st['next_round'])) if st['next_round'] else '—'}")
     lines.append(f"👑 دسترسیِ کامل: {'روشن' if st['full_access'] else 'خاموش'}")
+    lines.append("🩺 سلامتِ زمان‌بند:\n" + diag_text(await diagnose(st)))
     lines.append("حوزه‌ها (کلید: وضعیت):")
     for d in defs:
         lines.append(f"- {d['key']}: {'✅' if caps[d['key']] else '⛔'} {d['label']}")
