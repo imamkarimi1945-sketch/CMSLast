@@ -3,7 +3,7 @@
    • هیچ innerHTML با داده‌ی کاربر؛ فقط textContent؛ انیمیشن‌ها فقط transform/opacity و با prefers-reduced-motion خاموش می‌شوند */
 (function () {
   'use strict';
-  var BUILD = 'fx5', NS = 'http://www.w3.org/2000/svg';
+  var BUILD = 'fx6', NS = 'http://www.w3.org/2000/svg';
   var h, ic, hx, tg, toast, LS, api, Sheet, goHome, openChat;
   var root, hdrEl, heroEl, navEl, bodyEl;
   var D = null, fetchedAt = 0, view = 'over', shown = false, pollT = 0, tickT = 0, loading = false, rendered = false;
@@ -286,6 +286,7 @@
       kpi('اقدامِ مخرب', k.destructive, k.destructive > 3 ? 'bad' : 'ok', null, 'trash'), kpi('بازیکنِ اخطاری', k.warned, 'warn', null, 'alert'),
       kpi('مسابقه بدونِ نتیجه', k.matches_pending, k.matches_pending ? 'warn' : 'ok', fa(k.matches_today) + ' مسابقه‌ی امروز', 'clock'), kpi('ژورنال', k.journal_total, 'vi', null, 'book')]);
     var out = [bento];
+    var dg = diagCard(); if (dg) out.unshift(dg);
     /* «رهگشا چه فکر می‌کند» */
     var lastRound = D.journal.filter(function (j) { return j.kind === 'round'; })[0];
     out.push(card('آخرین برداشتِ رهگشا', 'brain', [lastRound
@@ -301,6 +302,20 @@
     }))] : [empty('هنوز رویدادی ثبت نشده.')]));
     if (D.risk.length) out.push(card('ریسکِ لحظه‌ایِ مدیران', 'alert', D.risk.map(function (r) { return li(r.replace(/^- /, ''), null); })));
     return out;
+  }
+
+  /* سلامتِ زمان‌بند: چرا رهگشا دور نمی‌زند؟ (علتِ «ساکت‌بودن» را همین‌جا می‌بینید) */
+  function diagCard() {
+    var d = D.diag || [];
+    if (!d.length || !D.mgr.active) return null;
+    var bad = d.filter(function (x) { return x.lvl === 'bad'; }), warn = d.filter(function (x) { return x.lvl === 'warn'; }), ok = !bad.length && !warn.length;
+    var rows = d.map(function (x) { return div('dg ' + x.lvl, [h('span', { class: 'dgi', text: x.lvl === 'ok' ? '✅' : x.lvl === 'warn' ? '⚠️' : '⛔' }), h('span', { text: x.text })]); });
+    var btns = [];
+    if (!ok) {
+      btns.push(btn('اجرای دور همین الان', 'p', function () { act({ a: 'mgr_round' }); }, 'brain'));
+      if (d.some(function (x) { return /دورهای خودکار.*خاموش/.test(x.text); })) btns.push(btn('روشن‌کردنِ دورهای خودکار', 'ok', function () { act({ a: 'mgr_schedule', autonomous: true }); }, 'bolt'));
+    }
+    return card(ok ? 'زمان‌بند سالم است' : 'رهگشا چرا دور نمی‌زند؟', ok ? 'pulse' : 'alert', [div('rgm-diag', rows)].concat(btns.length ? [div('rgm-row', btns)] : []), ok ? '' : 'danger');
   }
 
   /* صفِ کارِ رهگشا: کارهای عملیاتیِ واقعی که از دیتابیس درمی‌آیند */
